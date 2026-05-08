@@ -455,6 +455,14 @@ app.get('/', (req, res) => {
   const todayOrd = orders.filter(o => o.time.includes(today));
   const todayRev = todayOrd.reduce((s, o) => s + o.total, 0);
 
+  const badgeClass = (status = '') => {
+    const s = String(status).toLowerCase();
+    if (s.includes('cancel')) return 'badge badge--danger';
+    if (s.includes('pending')) return 'badge badge--warn';
+    if (s.includes('prepar')) return 'badge badge--info';
+    return 'badge badge--ok';
+  };
+
   const rows = orders.slice().reverse().map(o => `
     <tr>
       <td><b>#${o.num}</b></td>
@@ -463,7 +471,7 @@ app.get('/', (req, res) => {
       <td style="font-size:12px;max-width:160px">${o.address}</td>
       <td style="font-size:12px">${o.items.map(i=>`${i.name} ×${i.qty}`).join('<br>')}</td>
       <td><b>${R.currency}${o.total}</b></td>
-      <td><span class="badge">${o.status}</span></td>
+      <td><span class="${badgeClass(o.status)}">${o.status}</span></td>
       <td style="font-size:11px;color:#8a7a60">${o.time}</td>
     </tr>`).join('');
 
@@ -471,55 +479,186 @@ app.get('/', (req, res) => {
   <meta charset="UTF-8"><title>${R.name} — Orders</title>
   <meta http-equiv="refresh" content="20">
   <style>
+    :root{
+      --bg0:#07060a;
+      --bg1:#0b0a10;
+      --card:rgba(255,255,255,.06);
+      --card2:rgba(255,255,255,.08);
+      --stroke:rgba(255,255,255,.10);
+      --stroke2:rgba(255,255,255,.14);
+      --text:#efe9dc;
+      --muted:rgba(239,233,220,.62);
+      --muted2:rgba(239,233,220,.46);
+      --brand:#ffb55a;
+      --brand2:#ff7a45;
+      --ok:#35d07f;
+      --warn:#ffcc4d;
+      --info:#69b7ff;
+      --danger:#ff5a7a;
+      --shadow:0 18px 55px rgba(0,0,0,.55);
+      --shadow2:0 10px 26px rgba(0,0,0,.45);
+      --r:18px;
+    }
     *{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:'Segoe UI',sans-serif;background:#0c0a06;color:#f0e8d8;padding:24px}
-    h1{font-size:26px;color:#e8a030;margin-bottom:4px}
-    .sub{color:#8a7a60;font-size:13px;margin-bottom:24px}
-    .stats{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:28px}
-    .stat{background:#1e1710;border:1px solid #2e2214;border-radius:14px;padding:18px 24px;min-width:150px}
-    .stat-n{font-size:30px;font-weight:700;color:#e8a030}
-    .stat-l{font-size:12px;color:#8a7a60;margin-top:4px}
-    .setup-box{background:#1a120a;border:1px solid #3a2810;border-radius:14px;padding:20px;margin-bottom:28px;font-size:13px;line-height:2}
-    .setup-box h2{color:#f5c060;font-size:16px;margin-bottom:12px}
-    code{background:#0c0a06;padding:2px 8px;border-radius:5px;color:#f5c060;font-size:12px}
-    a{color:#25d366}
-    table{width:100%;border-collapse:collapse;font-size:13px;background:#161208;border-radius:12px;overflow:hidden}
-    th{background:#1e1710;color:#e8a030;padding:12px;text-align:left}
-    td{padding:10px 12px;border-bottom:1px solid #1a1208;vertical-align:top}
-    tr:hover td{background:#1a1208}
-    .badge{background:rgba(61,186,122,.15);color:#3dba7a;border:1px solid rgba(61,186,122,.3);padding:3px 10px;border-radius:100px;font-size:11px}
-    .live{float:right;display:inline-flex;align-items:center;gap:6px;background:rgba(61,186,122,.15);border:1px solid rgba(61,186,122,.3);color:#3dba7a;padding:6px 14px;border-radius:100px;font-size:12px}
-    .dot{width:8px;height:8px;border-radius:50%;background:#3dba7a;animation:p 1.5s infinite}
-    @keyframes p{0%,100%{opacity:1}50%{opacity:.3}}
-    .empty{text-align:center;padding:60px;color:#8a7a60;font-size:15px}
-    .env-needed{background:#2a1008;border:1px solid #8a3010;border-radius:8px;padding:12px 16px;color:#f5a060;font-size:13px;margin-bottom:16px}
+    html,body{height:100%}
+    body{
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      color:var(--text);
+      background:
+        radial-gradient(1100px 650px at 12% 0%, rgba(255,122,69,.22), transparent 65%),
+        radial-gradient(1000px 560px at 92% 18%, rgba(105,183,255,.18), transparent 62%),
+        radial-gradient(900px 520px at 55% 110%, rgba(53,208,127,.12), transparent 60%),
+        linear-gradient(180deg, var(--bg0), var(--bg1));
+      padding:28px 20px 44px;
+    }
+    .container{max-width:1180px;margin:0 auto}
+    .topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:18px}
+    .title{
+      display:flex;align-items:center;gap:12px;
+      background:linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.04));
+      border:1px solid var(--stroke);
+      border-radius:calc(var(--r) + 2px);
+      padding:14px 16px;
+      box-shadow:var(--shadow2);
+      backdrop-filter: blur(10px);
+    }
+    .logo{
+      width:40px;height:40px;border-radius:14px;
+      background:radial-gradient(circle at 30% 30%, rgba(255,255,255,.22), rgba(255,255,255,0) 60%),
+                 linear-gradient(135deg, rgba(255,181,90,.95), rgba(255,122,69,.85));
+      border:1px solid rgba(255,255,255,.18);
+      box-shadow:0 14px 36px rgba(255,122,69,.18);
+      flex:0 0 auto;
+    }
+    h1{font-size:22px;letter-spacing:.2px;line-height:1.1}
+    .sub{color:var(--muted);font-size:13px;margin-top:4px}
+    .pill{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;border:1px solid var(--stroke);background:rgba(255,255,255,.06);backdrop-filter: blur(10px);box-shadow:var(--shadow2);font-size:12px;color:var(--muted)}
+    .pill strong{color:var(--text);font-weight:650}
+    .liveDot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 6px rgba(53,208,127,.12);animation:pulse 1.5s infinite}
+    @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(.88);opacity:.65}}
+
+    .grid{display:grid;gap:14px}
+    .stats{grid-template-columns: repeat(4, minmax(0, 1fr)); margin:18px 0 18px}
+    .card{
+      background:linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.05));
+      border:1px solid var(--stroke);
+      border-radius:var(--r);
+      box-shadow:var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+    .stat{padding:16px 16px 14px;display:flex;gap:12px;align-items:flex-start}
+    .statIcon{width:36px;height:36px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.85);font-size:16px;flex:0 0 auto}
+    .stat-n{font-size:24px;font-weight:800;color:var(--text);letter-spacing:.2px}
+    .stat-l{font-size:12px;color:var(--muted2);margin-top:3px}
+
+    .alert{
+      background:linear-gradient(180deg, rgba(255,90,122,.10), rgba(255,90,122,.06));
+      border:1px solid rgba(255,90,122,.26);
+      color:rgba(255,230,238,.92);
+      padding:14px 16px;
+      border-radius:14px;
+      margin:10px 0 16px;
+      box-shadow:var(--shadow2);
+      backdrop-filter: blur(10px);
+      font-size:13px;
+    }
+
+    .section{margin-top:14px}
+    .sectionHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 10px}
+    .sectionHead h2{font-size:14px;letter-spacing:.25px;color:rgba(255,255,255,.9)}
+    .sectionHead .hint{font-size:12px;color:var(--muted2)}
+
+    .setup{padding:16px}
+    .setup ol{margin-left:18px;color:var(--muted);font-size:13px;line-height:1.9}
+    code{background:rgba(0,0,0,.35);padding:2px 8px;border-radius:8px;color:rgba(255,225,190,.95);border:1px solid rgba(255,255,255,.10);font-size:12px}
+    a{color:#59ffa6}
+
+    .tableWrap{overflow:auto;border-radius:var(--r)}
+    table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+    thead th{
+      position:sticky;top:0;z-index:1;
+      background:linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.06));
+      color:rgba(255,255,255,.86);
+      text-align:left;
+      padding:12px 12px;
+      border-bottom:1px solid var(--stroke);
+      backdrop-filter: blur(10px);
+      white-space:nowrap;
+    }
+    tbody td{padding:12px 12px;border-bottom:1px solid rgba(255,255,255,.07);vertical-align:top;color:rgba(255,255,255,.84)}
+    tbody tr:hover td{background:rgba(255,255,255,.04)}
+    .mutedCell{color:var(--muted);font-size:12px}
+
+    .badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:4px 10px;border:1px solid var(--stroke2);font-size:11px;color:rgba(255,255,255,.86);background:rgba(255,255,255,.06)}
+    .badge--ok{border-color:rgba(53,208,127,.35);background:rgba(53,208,127,.12)}
+    .badge--warn{border-color:rgba(255,204,77,.40);background:rgba(255,204,77,.12)}
+    .badge--info{border-color:rgba(105,183,255,.40);background:rgba(105,183,255,.12)}
+    .badge--danger{border-color:rgba(255,90,122,.42);background:rgba(255,90,122,.12)}
+
+    .empty{padding:22px 16px;text-align:center;color:var(--muted);font-size:14px}
+    .empty strong{color:rgba(255,255,255,.9)}
+
+    @media (max-width: 980px){
+      .stats{grid-template-columns: repeat(2, minmax(0, 1fr));}
+    }
+    @media (max-width: 520px){
+      body{padding:18px 14px 34px}
+      .title{padding:12px 12px}
+      .logo{width:36px;height:36px;border-radius:13px}
+      h1{font-size:20px}
+      .stats{grid-template-columns: 1fr;}
+    }
   </style></head><body>
-  <h1>🍽️ ${R.name}</h1>
-  <div class="sub">WhatsApp Business Bot · Admin Dashboard <span class="live"><span class="dot"></span>Live</span></div>
+  <div class="container">
+    <div class="topbar">
+      <div class="title">
+        <div class="logo" aria-hidden="true"></div>
+        <div>
+          <h1>${R.name}</h1>
+          <div class="sub">WhatsApp Business Bot · Admin Dashboard</div>
+        </div>
+      </div>
+      <div class="pill"><span class="liveDot"></span> <strong>Live</strong> <span style="opacity:.75">· refresh 20s</span></div>
+    </div>
 
-  ${!PHONE_NUMBER_ID ? `<div class="env-needed">⚠️ <b>Bot not configured yet.</b> Add your Meta API credentials to the <code>.env</code> file to activate WhatsApp. See setup instructions below.</div>` : ''}
+    ${!PHONE_NUMBER_ID ? `<div class="alert"><b>Bot not configured yet.</b> Add your Meta API credentials to the <code>.env</code> file to activate WhatsApp. A quick setup checklist is below.</div>` : ''}
 
-  <div class="stats">
-    <div class="stat"><div class="stat-n">${orders.length}</div><div class="stat-l">Total Orders</div></div>
-    <div class="stat"><div class="stat-n">${R.currency}${totalRev.toLocaleString()}</div><div class="stat-l">Total Revenue</div></div>
-    <div class="stat"><div class="stat-n">${todayOrd.length}</div><div class="stat-l">Today's Orders</div></div>
-    <div class="stat"><div class="stat-n">${R.currency}${todayRev.toLocaleString()}</div><div class="stat-l">Today's Revenue</div></div>
+    <div class="grid stats">
+      <div class="card stat"><div class="statIcon">🧾</div><div><div class="stat-n">${orders.length}</div><div class="stat-l">Total Orders</div></div></div>
+      <div class="card stat"><div class="statIcon">💰</div><div><div class="stat-n">${R.currency}${totalRev.toLocaleString()}</div><div class="stat-l">Total Revenue</div></div></div>
+      <div class="card stat"><div class="statIcon">📦</div><div><div class="stat-n">${todayOrd.length}</div><div class="stat-l">Today’s Orders</div></div></div>
+      <div class="card stat"><div class="statIcon">⚡</div><div><div class="stat-n">${R.currency}${todayRev.toLocaleString()}</div><div class="stat-l">Today’s Revenue</div></div></div>
+    </div>
+
+    ${!PHONE_NUMBER_ID ? `
+      <div class="section">
+        <div class="sectionHead"><h2>Meta API setup checklist</h2><div class="hint">Once done, messages start flowing instantly</div></div>
+        <div class="card setup">
+          <ol>
+            <li>Create an app at <a href="https://developers.facebook.com/" target="_blank" rel="noreferrer">developers.facebook.com</a> → “Business” type</li>
+            <li>Add the <b>WhatsApp</b> product → get your <b>Phone Number ID</b> and a permanent/semi-permanent <b>Access Token</b></li>
+            <li>Put values into <code>.env</code> (see <code>.env.example</code>)</li>
+            <li>Deploy this bot (Railway/Render/etc) to get a public URL</li>
+            <li>In Meta dashboard → Webhooks → set callback URL to <code>https://YOUR-DOMAIN/webhook</code> and verify token <code>${VERIFY_TOKEN}</code></li>
+            <li>Subscribe to <b>messages</b> field → users can order via WhatsApp</li>
+          </ol>
+        </div>
+      </div>
+    ` : ''}
+
+    <div class="section">
+      <div class="sectionHead"><h2>Orders</h2><div class="hint">${orders.length ? `Showing latest ${orders.length} order(s)` : 'Waiting for first order…'}</div></div>
+      <div class="card">
+        ${orders.length === 0
+          ? `<div class="empty">⏳ <strong>No orders yet.</strong> When customers message your WhatsApp Business number, orders will appear here automatically.</div>`
+          : `<div class="tableWrap"><table>
+              <thead><tr><th>Order</th><th>Name</th><th>Phone</th><th>Address</th><th>Items</th><th>Total</th><th>Status</th><th>Time</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table></div>`
+        }
+      </div>
+    </div>
   </div>
-
-  <div class="setup-box">
-    <h2>🔧 Meta API Setup Checklist</h2>
-    1. Go to <a href="https://developers.facebook.com" target="_blank">developers.facebook.com</a> → Create App → Business type<br>
-    2. Add <b>WhatsApp</b> product → Get your <code>Phone Number ID</code> and <code>Access Token</code><br>
-    3. Paste them in your <code>.env</code> file<br>
-    4. Deploy this bot to <a href="https://railway.app" target="_blank">Railway.app</a> (free) → get your public URL<br>
-    5. In Meta dashboard → Webhooks → Set URL: <code>https://YOUR-URL/webhook</code> · Verify Token: <code>${VERIFY_TOKEN}</code><br>
-    6. Subscribe to <b>messages</b> field → Done! Customers can now order via WhatsApp 🎉
-  </div>
-
-  ${orders.length === 0
-    ? `<div class="empty">⏳ No orders yet — once customers message your WhatsApp Business number, orders appear here automatically.</div>`
-    : `<table><thead><tr><th>Order</th><th>Name</th><th>Phone</th><th>Address</th><th>Items</th><th>Total</th><th>Status</th><th>Time</th></tr></thead><tbody>${rows}</tbody></table>`
-  }
   </body></html>`);
 });
 
