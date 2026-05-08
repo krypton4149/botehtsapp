@@ -463,16 +463,28 @@ app.get('/', (req, res) => {
     return 'badge badge--ok';
   };
 
+  const initials = (name = '') =>
+    String(name)
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map(w => w[0]?.toUpperCase())
+      .join('') || 'U';
+
   const rows = orders.slice().reverse().map(o => `
     <tr>
       <td><b>#${o.num}</b></td>
-      <td>${o.name}</td>
+      <td>
+        <div class="nameCell">
+          <div class="avatar">${initials(o.name)}</div>
+          <div class="nameText">${o.name}</div>
+        </div>
+      </td>
       <td>${o.phone}</td>
-      <td style="font-size:12px;max-width:160px">${o.address}</td>
-      <td style="font-size:12px">${o.items.map(i=>`${i.name} ×${i.qty}`).join('<br>')}</td>
+      <td class="truncate" title="${o.address}">${o.address}</td>
+      <td class="itemsCell">${o.items.map(i=>`${i.name}<span class="muted"> ×${i.qty}</span>`).join('<br>')}</td>
       <td><b>${R.currency}${o.total}</b></td>
-      <td><span class="${badgeClass(o.status)}">${o.status}</span></td>
-      <td style="font-size:11px;color:#8a7a60">${o.time}</td>
+      <td><span class="${badgeClass(o.status)}"><span class="bDot"></span>${o.status}</span></td>
     </tr>`).join('');
 
   res.send(`<!DOCTYPE html><html><head>
@@ -480,24 +492,23 @@ app.get('/', (req, res) => {
   <meta http-equiv="refresh" content="20">
   <style>
     :root{
-      --bg0:#07060a;
-      --bg1:#0b0a10;
-      --card:rgba(255,255,255,.06);
-      --card2:rgba(255,255,255,.08);
-      --stroke:rgba(255,255,255,.10);
-      --stroke2:rgba(255,255,255,.14);
-      --text:#efe9dc;
-      --muted:rgba(239,233,220,.62);
-      --muted2:rgba(239,233,220,.46);
-      --brand:#ffb55a;
-      --brand2:#ff7a45;
+      --bg:#0b0c12;
+      --bg2:#0f1018;
+      --panel:#12131b;
+      --panel2:#141622;
+      --card:#161827;
+      --stroke:rgba(255,255,255,.08);
+      --stroke2:rgba(255,255,255,.12);
+      --text:rgba(255,255,255,.92);
+      --muted:rgba(255,255,255,.58);
+      --muted2:rgba(255,255,255,.40);
+      --accent:#ff8a1f;
+      --accent2:#ffb25a;
       --ok:#35d07f;
-      --warn:#ffcc4d;
-      --info:#69b7ff;
-      --danger:#ff5a7a;
-      --shadow:0 18px 55px rgba(0,0,0,.55);
-      --shadow2:0 10px 26px rgba(0,0,0,.45);
-      --r:18px;
+      --shadow:0 18px 50px rgba(0,0,0,.55);
+      --shadow2:0 10px 24px rgba(0,0,0,.50);
+      --r:16px;
+      --sidebar:260px;
     }
     *{margin:0;padding:0;box-sizing:border-box}
     html,body{height:100%}
@@ -505,159 +516,415 @@ app.get('/', (req, res) => {
       font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
       color:var(--text);
       background:
-        radial-gradient(1100px 650px at 12% 0%, rgba(255,122,69,.22), transparent 65%),
-        radial-gradient(1000px 560px at 92% 18%, rgba(105,183,255,.18), transparent 62%),
-        radial-gradient(900px 520px at 55% 110%, rgba(53,208,127,.12), transparent 60%),
-        linear-gradient(180deg, var(--bg0), var(--bg1));
-      padding:28px 20px 44px;
+        radial-gradient(1200px 700px at 20% 0%, rgba(255,138,31,.14), transparent 60%),
+        radial-gradient(1100px 650px at 85% 15%, rgba(120,130,255,.10), transparent 62%),
+        linear-gradient(180deg, var(--bg), var(--bg2));
+      overflow-x:hidden;
     }
-    .container{max-width:1180px;margin:0 auto}
-    .topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:18px}
-    .title{
-      display:flex;align-items:center;gap:12px;
-      background:linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.04));
-      border:1px solid var(--stroke);
-      border-radius:calc(var(--r) + 2px);
-      padding:14px 16px;
-      box-shadow:var(--shadow2);
-      backdrop-filter: blur(10px);
-    }
-    .logo{
-      width:40px;height:40px;border-radius:14px;
-      background:radial-gradient(circle at 30% 30%, rgba(255,255,255,.22), rgba(255,255,255,0) 60%),
-                 linear-gradient(135deg, rgba(255,181,90,.95), rgba(255,122,69,.85));
-      border:1px solid rgba(255,255,255,.18);
-      box-shadow:0 14px 36px rgba(255,122,69,.18);
-      flex:0 0 auto;
-    }
-    h1{font-size:22px;letter-spacing:.2px;line-height:1.1}
-    .sub{color:var(--muted);font-size:13px;margin-top:4px}
-    .pill{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;border:1px solid var(--stroke);background:rgba(255,255,255,.06);backdrop-filter: blur(10px);box-shadow:var(--shadow2);font-size:12px;color:var(--muted)}
-    .pill strong{color:var(--text);font-weight:650}
-    .liveDot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 6px rgba(53,208,127,.12);animation:pulse 1.5s infinite}
-    @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(.88);opacity:.65}}
-
-    .grid{display:grid;gap:14px}
-    .stats{grid-template-columns: repeat(4, minmax(0, 1fr)); margin:18px 0 18px}
-    .card{
-      background:linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.05));
-      border:1px solid var(--stroke);
-      border-radius:var(--r);
-      box-shadow:var(--shadow);
+    .app{display:flex;min-height:100vh}
+    .sidebar{
+      width:var(--sidebar);
+      padding:22px 18px;
+      background:linear-gradient(180deg, rgba(18,19,27,.92), rgba(14,15,22,.92));
+      border-right:1px solid rgba(255,255,255,.06);
+      position:sticky;top:0;height:100vh;
       backdrop-filter: blur(12px);
     }
-    .stat{padding:16px 16px 14px;display:flex;gap:12px;align-items:flex-start}
-    .statIcon{width:36px;height:36px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.85);font-size:16px;flex:0 0 auto}
-    .stat-n{font-size:24px;font-weight:800;color:var(--text);letter-spacing:.2px}
-    .stat-l{font-size:12px;color:var(--muted2);margin-top:3px}
+    .brand{
+      display:flex;align-items:center;gap:12px;
+      padding:10px 10px 18px;
+    }
+    .mark{
+      width:38px;height:38px;border-radius:12px;
+      background:linear-gradient(135deg, rgba(255,138,31,.95), rgba(255,186,90,.72));
+      display:flex;align-items:center;justify-content:center;
+      box-shadow:0 14px 30px rgba(255,138,31,.18);
+      color:#1a120a;font-weight:900;
+    }
+    .brand h1{font-size:20px;line-height:1.05}
+    .brand small{display:block;color:var(--muted2);letter-spacing:.14em;font-size:10px;margin-top:5px}
 
-    .alert{
-      background:linear-gradient(180deg, rgba(255,90,122,.10), rgba(255,90,122,.06));
-      border:1px solid rgba(255,90,122,.26);
-      color:rgba(255,230,238,.92);
-      padding:14px 16px;
-      border-radius:14px;
-      margin:10px 0 16px;
+    .nav{margin-top:8px;display:flex;flex-direction:column;gap:6px}
+    .nav a{
+      text-decoration:none;color:var(--muted);
+      padding:11px 12px;border-radius:12px;
+      display:flex;align-items:center;gap:12px;
+      border:1px solid transparent;
+    }
+    .nav a .ico{width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;opacity:.9}
+    .nav a.active{
+      color:rgba(255,201,148,.95);
+      background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      border-color:rgba(255,255,255,.08);
       box-shadow:var(--shadow2);
-      backdrop-filter: blur(10px);
+    }
+    .nav a:hover{background:rgba(255,255,255,.04);color:rgba(255,255,255,.80)}
+
+    .sidebarFoot{margin-top:auto;padding:18px 10px 6px;color:var(--muted2);font-size:12px;display:flex;flex-direction:column;gap:10px}
+    .helpRow{display:flex;align-items:center;gap:10px}
+    .helpDot{width:18px;height:18px;border-radius:999px;border:1px solid rgba(255,255,255,.10);display:flex;align-items:center;justify-content:center}
+    .cta{
+      margin-top:14px;
+      width:100%;
+      border:0;
+      background:linear-gradient(135deg, rgba(255,138,31,1), rgba(255,186,90,.95));
+      color:#1a120a;
+      font-weight:800;
+      padding:14px 14px;
+      border-radius:12px;
+      box-shadow:0 18px 40px rgba(255,138,31,.16);
+      cursor:pointer;
+    }
+
+    .main{flex:1; padding:18px 26px 38px;}
+    .topbar{
+      display:flex;align-items:center;justify-content:space-between;gap:18px;
+      padding:8px 2px 18px;
+    }
+    .search{
+      flex:0 0 320px;
+      background:rgba(255,255,255,.04);
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:12px;
+      display:flex;align-items:center;gap:10px;
+      padding:10px 12px;
+      box-shadow:var(--shadow2);
+    }
+    .search input{
+      width:100%;
+      border:0;outline:0;
+      background:transparent;
+      color:rgba(255,255,255,.88);
       font-size:13px;
     }
+    .search input::placeholder{color:rgba(255,255,255,.34)}
+    .tabs{display:flex;align-items:center;gap:18px;color:var(--muted);font-size:13px}
+    .tabs .tab{position:relative;padding:10px 6px}
+    .tabs .tab.active{color:rgba(255,186,90,.92)}
+    .tabs .tab.active:after{
+      content:"";position:absolute;left:8px;right:8px;bottom:4px;height:2px;border-radius:999px;
+      background:linear-gradient(90deg, rgba(255,138,31,1), rgba(255,186,90,.9));
+    }
+    .right{display:flex;align-items:center;gap:12px}
+    .statusPill{
+      display:inline-flex;align-items:center;gap:8px;
+      padding:9px 12px;border-radius:999px;
+      background:rgba(53,208,127,.10);
+      border:1px solid rgba(53,208,127,.22);
+      color:rgba(170,255,215,.92);
+      font-size:12px;
+      box-shadow:var(--shadow2);
+    }
+    .liveDot{width:8px;height:8px;border-radius:999px;background:var(--ok);box-shadow:0 0 0 6px rgba(53,208,127,.10)}
+    .iconBtn{
+      width:36px;height:36px;border-radius:12px;
+      background:rgba(255,255,255,.04);
+      border:1px solid rgba(255,255,255,.08);
+      display:flex;align-items:center;justify-content:center;
+      color:rgba(255,255,255,.78);
+      box-shadow:var(--shadow2);
+    }
+    .profile{
+      width:36px;height:36px;border-radius:999px;
+      background:linear-gradient(135deg, rgba(255,255,255,.12), rgba(255,255,255,.04));
+      border:1px solid rgba(255,255,255,.10);
+      display:flex;align-items:center;justify-content:center;
+      font-weight:800;color:rgba(255,255,255,.75);
+      box-shadow:var(--shadow2);
+    }
 
-    .section{margin-top:14px}
-    .sectionHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 10px}
-    .sectionHead h2{font-size:14px;letter-spacing:.25px;color:rgba(255,255,255,.9)}
-    .sectionHead .hint{font-size:12px;color:var(--muted2)}
+    .cards{display:grid;grid-template-columns:repeat(4, minmax(0,1fr));gap:18px;margin-top:6px}
+    .card{
+      background:linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:18px;
+      box-shadow:var(--shadow);
+    }
+    .kpi{padding:18px 18px 16px;min-height:118px;display:flex;flex-direction:column;gap:10px}
+    .kpiTop{display:flex;align-items:center;justify-content:space-between}
+    .kpiIco{
+      width:40px;height:40px;border-radius:14px;
+      display:flex;align-items:center;justify-content:center;
+      border:1px solid rgba(255,255,255,.10);
+      background:rgba(255,255,255,.04);
+      color:rgba(255,255,255,.82);
+    }
+    .kpiChip{
+      font-size:11px;color:rgba(170,255,215,.90);
+      padding:6px 10px;border-radius:999px;
+      background:rgba(53,208,127,.10);
+      border:1px solid rgba(53,208,127,.18);
+    }
+    .kpiLabel{color:rgba(255,255,255,.68);font-size:12px}
+    .kpiValue{font-size:36px;letter-spacing:.2px;font-weight:850;margin-top:-4px}
 
-    .setup{padding:16px}
-    .setup ol{margin-left:18px;color:var(--muted);font-size:13px;line-height:1.9}
-    code{background:rgba(0,0,0,.35);padding:2px 8px;border-radius:8px;color:rgba(255,225,190,.95);border:1px solid rgba(255,255,255,.10);font-size:12px}
-    a{color:#59ffa6}
+    .section{margin-top:26px}
+    .sectionHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+    .sectionTitle{font-size:20px;font-weight:750}
+    .sectionHint{color:var(--muted2);font-size:12px;margin-top:3px}
+    .history{
+      color:rgba(255,186,90,.88);
+      font-size:13px;
+      text-decoration:none;
+      display:inline-flex;align-items:center;gap:8px;
+    }
+    .history:hover{color:rgba(255,220,170,.95)}
 
-    .tableWrap{overflow:auto;border-radius:var(--r)}
+    .tableCard{padding:14px;border-radius:18px}
     table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
     thead th{
-      position:sticky;top:0;z-index:1;
-      background:linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.06));
-      color:rgba(255,255,255,.86);
+      text-transform:uppercase;
+      letter-spacing:.12em;
+      font-size:11px;
+      color:rgba(255,255,255,.55);
       text-align:left;
       padding:12px 12px;
-      border-bottom:1px solid var(--stroke);
-      backdrop-filter: blur(10px);
+      border-bottom:1px solid rgba(255,255,255,.06);
+      background:transparent;
       white-space:nowrap;
     }
-    tbody td{padding:12px 12px;border-bottom:1px solid rgba(255,255,255,.07);vertical-align:top;color:rgba(255,255,255,.84)}
-    tbody tr:hover td{background:rgba(255,255,255,.04)}
-    .mutedCell{color:var(--muted);font-size:12px}
-
-    .badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:4px 10px;border:1px solid var(--stroke2);font-size:11px;color:rgba(255,255,255,.86);background:rgba(255,255,255,.06)}
-    .badge--ok{border-color:rgba(53,208,127,.35);background:rgba(53,208,127,.12)}
-    .badge--warn{border-color:rgba(255,204,77,.40);background:rgba(255,204,77,.12)}
-    .badge--info{border-color:rgba(105,183,255,.40);background:rgba(105,183,255,.12)}
-    .badge--danger{border-color:rgba(255,90,122,.42);background:rgba(255,90,122,.12)}
-
-    .empty{padding:22px 16px;text-align:center;color:var(--muted);font-size:14px}
-    .empty strong{color:rgba(255,255,255,.9)}
-
-    @media (max-width: 980px){
-      .stats{grid-template-columns: repeat(2, minmax(0, 1fr));}
+    tbody td{
+      padding:16px 12px;
+      border-bottom:1px solid rgba(255,255,255,.06);
+      color:rgba(255,255,255,.82);
+      vertical-align:middle;
     }
-    @media (max-width: 520px){
-      body{padding:18px 14px 34px}
-      .title{padding:12px 12px}
-      .logo{width:36px;height:36px;border-radius:13px}
-      h1{font-size:20px}
-      .stats{grid-template-columns: 1fr;}
+    tbody tr:last-child td{border-bottom:0}
+    .nameCell{display:flex;align-items:center;gap:12px}
+    .avatar{
+      width:34px;height:34px;border-radius:999px;
+      background:rgba(255,255,255,.06);
+      border:1px solid rgba(255,255,255,.10);
+      display:flex;align-items:center;justify-content:center;
+      font-weight:850;font-size:12px;color:rgba(255,255,255,.70);
+    }
+    .nameText{font-weight:650}
+    .truncate{max-width:210px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:rgba(255,255,255,.70);font-size:12px}
+    .itemsCell{color:rgba(255,255,255,.72);font-size:12px;line-height:1.55}
+    .muted{color:rgba(255,255,255,.40)}
+
+    .badge{
+      display:inline-flex;align-items:center;gap:8px;
+      padding:8px 12px;border-radius:999px;
+      font-size:12px;font-weight:650;
+      border:1px solid rgba(255,255,255,.10);
+      background:rgba(255,255,255,.04);
+      color:rgba(255,255,255,.78);
+      white-space:nowrap;
+    }
+    .bDot{width:6px;height:6px;border-radius:999px;background:rgba(255,255,255,.55)}
+    .badge--ok{border-color:rgba(53,208,127,.22);background:rgba(53,208,127,.10);color:rgba(170,255,215,.92)}
+    .badge--ok .bDot{background:rgba(53,208,127,1)}
+    .badge--warn{border-color:rgba(255,204,77,.24);background:rgba(255,204,77,.10);color:rgba(255,230,160,.92)}
+    .badge--warn .bDot{background:rgba(255,204,77,1)}
+    .badge--info{border-color:rgba(120,130,255,.24);background:rgba(120,130,255,.10);color:rgba(210,215,255,.92)}
+    .badge--info .bDot{background:rgba(120,130,255,1)}
+    .badge--danger{border-color:rgba(255,90,122,.26);background:rgba(255,90,122,.10);color:rgba(255,210,220,.92)}
+    .badge--danger .bDot{background:rgba(255,90,122,1)}
+
+    .empty{
+      padding:24px 14px;
+      color:var(--muted);
+      text-align:center;
+    }
+
+    .widgets{display:grid;grid-template-columns:1.2fr .8fr;gap:18px;margin-top:18px}
+    .imgWidget{
+      position:relative;
+      overflow:hidden;
+      border-radius:18px;
+      min-height:170px;
+      background:
+        linear-gradient(180deg, rgba(0,0,0,.10), rgba(0,0,0,.55)),
+        radial-gradient(800px 420px at 30% 30%, rgba(255,138,31,.18), transparent 60%),
+        linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+    }
+    .imgWidget:before{
+      content:"";
+      position:absolute;inset:0;
+      background:
+        url("https://images.unsplash.com/photo-1529692236671-f1de01f0b8a5?auto=format&fit=crop&w=1400&q=60");
+      background-size:cover;background-position:center;
+      opacity:.25;
+      filter:saturate(.9) contrast(1.08);
+    }
+    .imgWidget .wBody{
+      position:relative;
+      padding:22px;
+      display:flex;
+      flex-direction:column;
+      justify-content:flex-end;
+      min-height:170px;
+    }
+    .wTitle{font-size:18px;font-weight:800}
+    .wSub{margin-top:6px;color:rgba(255,255,255,.62);font-size:12px;max-width:440px;line-height:1.5}
+
+    .chartWidget{padding:18px 18px 16px}
+    .chartHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+    .chartHead h3{font-size:16px}
+    .bars{display:flex;gap:10px;align-items:flex-end;height:110px;padding:10px 6px 0;border-radius:14px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06)}
+    .bar{flex:1;border-radius:10px;background:rgba(255,255,255,.16)}
+    .bar:nth-child(1){height:55%}
+    .bar:nth-child(2){height:72%}
+    .bar:nth-child(3){height:44%}
+    .bar:nth-child(4){height:88%}
+    .bar:nth-child(5){height:62%}
+    .bar:nth-child(6){height:70%}
+
+    .alert{
+      margin-top:14px;
+      border-radius:14px;
+      padding:12px 14px;
+      background:rgba(255,90,122,.10);
+      border:1px solid rgba(255,90,122,.20);
+      color:rgba(255,225,230,.92);
+      font-size:13px;
+    }
+    code{background:rgba(0,0,0,.30);padding:2px 8px;border-radius:10px;border:1px solid rgba(255,255,255,.10);color:rgba(255,225,190,.95);font-size:12px}
+    a{color:rgba(255,186,90,.92)}
+
+    @media (max-width: 1100px){
+      .cards{grid-template-columns:repeat(2, minmax(0,1fr));}
+      .widgets{grid-template-columns:1fr;}
+      .search{flex-basis:280px}
+    }
+    @media (max-width: 820px){
+      .sidebar{display:none}
+      .main{padding:16px 16px 32px}
+      .search{display:none}
+      .tabs{display:none}
+      .cards{grid-template-columns:1fr}
+      .truncate{max-width:140px}
     }
   </style></head><body>
-  <div class="container">
-    <div class="topbar">
-      <div class="title">
-        <div class="logo" aria-hidden="true"></div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark">🍴</div>
         <div>
           <h1>${R.name}</h1>
-          <div class="sub">WhatsApp Business Bot · Admin Dashboard</div>
+          <small>ADMIN DASHBOARD</small>
         </div>
       </div>
-      <div class="pill"><span class="liveDot"></span> <strong>Live</strong> <span style="opacity:.75">· refresh 20s</span></div>
-    </div>
 
-    ${!PHONE_NUMBER_ID ? `<div class="alert"><b>Bot not configured yet.</b> Add your Meta API credentials to the <code>.env</code> file to activate WhatsApp. A quick setup checklist is below.</div>` : ''}
+      <nav class="nav" aria-label="Sidebar">
+        <a class="active" href="#"><span class="ico">▦</span> Overview</a>
+        <a href="#"><span class="ico">🧾</span> Orders</a>
+        <a href="#"><span class="ico">📖</span> Menu</a>
+        <a href="#"><span class="ico">📈</span> Analytics</a>
+        <a href="#"><span class="ico">⚙️</span> Settings</a>
+      </nav>
 
-    <div class="grid stats">
-      <div class="card stat"><div class="statIcon">🧾</div><div><div class="stat-n">${orders.length}</div><div class="stat-l">Total Orders</div></div></div>
-      <div class="card stat"><div class="statIcon">💰</div><div><div class="stat-n">${R.currency}${totalRev.toLocaleString()}</div><div class="stat-l">Total Revenue</div></div></div>
-      <div class="card stat"><div class="statIcon">📦</div><div><div class="stat-n">${todayOrd.length}</div><div class="stat-l">Today’s Orders</div></div></div>
-      <div class="card stat"><div class="statIcon">⚡</div><div><div class="stat-n">${R.currency}${todayRev.toLocaleString()}</div><div class="stat-l">Today’s Revenue</div></div></div>
-    </div>
+      <button class="cta" type="button">＋ Add New Order</button>
 
-    ${!PHONE_NUMBER_ID ? `
-      <div class="section">
-        <div class="sectionHead"><h2>Meta API setup checklist</h2><div class="hint">Once done, messages start flowing instantly</div></div>
-        <div class="card setup">
-          <ol>
-            <li>Create an app at <a href="https://developers.facebook.com/" target="_blank" rel="noreferrer">developers.facebook.com</a> → “Business” type</li>
-            <li>Add the <b>WhatsApp</b> product → get your <b>Phone Number ID</b> and a permanent/semi-permanent <b>Access Token</b></li>
-            <li>Put values into <code>.env</code> (see <code>.env.example</code>)</li>
-            <li>Deploy this bot (Railway/Render/etc) to get a public URL</li>
-            <li>In Meta dashboard → Webhooks → set callback URL to <code>https://YOUR-DOMAIN/webhook</code> and verify token <code>${VERIFY_TOKEN}</code></li>
-            <li>Subscribe to <b>messages</b> field → users can order via WhatsApp</li>
-          </ol>
+      <div class="sidebarFoot">
+        <div class="helpRow"><span class="helpDot">?</span> Help Center</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <div class="search">
+          <span style="opacity:.7">🔎</span>
+          <input placeholder="Search dashboard..." />
+        </div>
+
+        <div class="tabs" aria-label="Top tabs">
+          <div class="tab active">Dashboard</div>
+        </div>
+
+        <div class="right">
+          <div class="statusPill"><span class="liveDot"></span> Live Status</div>
+          <div class="iconBtn" title="Notifications">🔔</div>
+          <div class="profile" title="Profile">👤</div>
         </div>
       </div>
-    ` : ''}
 
-    <div class="section">
-      <div class="sectionHead"><h2>Orders</h2><div class="hint">${orders.length ? `Showing latest ${orders.length} order(s)` : 'Waiting for first order…'}</div></div>
-      <div class="card">
-        ${orders.length === 0
-          ? `<div class="empty">⏳ <strong>No orders yet.</strong> When customers message your WhatsApp Business number, orders will appear here automatically.</div>`
-          : `<div class="tableWrap"><table>
-              <thead><tr><th>Order</th><th>Name</th><th>Phone</th><th>Address</th><th>Items</th><th>Total</th><th>Status</th><th>Time</th></tr></thead>
-              <tbody>${rows}</tbody>
-            </table></div>`
-        }
-      </div>
-    </div>
+      ${!PHONE_NUMBER_ID ? `<div class="alert"><b>Bot not configured yet.</b> Add your Meta API credentials in <code>.env</code> (see <code>.env.example</code>) to activate WhatsApp webhooks.</div>` : ''}
+
+      <section class="cards" aria-label="KPIs">
+        <div class="card kpi">
+          <div class="kpiTop">
+            <div class="kpiIco">🧾</div>
+            <div class="kpiChip">↗ +12%</div>
+          </div>
+          <div class="kpiLabel">Total Orders</div>
+          <div class="kpiValue">${orders.length}</div>
+        </div>
+        <div class="card kpi">
+          <div class="kpiTop">
+            <div class="kpiIco">💸</div>
+            <div class="kpiChip">↗ +8%</div>
+          </div>
+          <div class="kpiLabel">Total Revenue</div>
+          <div class="kpiValue">${R.currency}${totalRev.toLocaleString()}</div>
+        </div>
+        <div class="card kpi">
+          <div class="kpiTop">
+            <div class="kpiIco">📦</div>
+            <div class="kpiChip">↗ +5%</div>
+          </div>
+          <div class="kpiLabel">Today's Orders</div>
+          <div class="kpiValue">${todayOrd.length}</div>
+        </div>
+        <div class="card kpi">
+          <div class="kpiTop">
+            <div class="kpiIco">⚡</div>
+            <div class="kpiChip">↗ +9%</div>
+          </div>
+          <div class="kpiLabel">Today's Revenue</div>
+          <div class="kpiValue">${R.currency}${todayRev.toLocaleString()}</div>
+        </div>
+      </section>
+
+      <section class="section" aria-label="Orders">
+        <div class="sectionHead">
+          <div>
+            <div class="sectionTitle">Orders</div>
+            <div class="sectionHint">${orders.length ? `Showing latest ${orders.length} order(s)` : 'Waiting for first order…'}</div>
+          </div>
+          <a class="history" href="#"><span>View All History</span> <span aria-hidden="true">→</span></a>
+        </div>
+
+        <div class="card tableCard">
+          ${orders.length === 0
+            ? `<div class="empty">⏳ No orders yet — once customers message your WhatsApp Business number, orders appear here automatically.</div>`
+            : `<table>
+                <thead>
+                  <tr>
+                    <th>Order</th>
+                    <th>Name</th>
+                    <th>Phone</th>
+                    <th>Address</th>
+                    <th>Items</th>
+                    <th>Total</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+              </table>`
+          }
+        </div>
+      </section>
+
+      <section class="widgets" aria-label="Widgets">
+        <div class="card imgWidget">
+          <div class="wBody">
+            <div class="wTitle">System Performance</div>
+            <div class="wSub">AI-driven kitchen optimization and staff management tools active.</div>
+          </div>
+        </div>
+        <div class="card chartWidget">
+          <div class="chartHead">
+            <h3>Revenue Growth</h3>
+            <div style="color:rgba(255,255,255,.42);font-size:12px">Last 6 days</div>
+          </div>
+          <div class="bars" aria-hidden="true">
+            <div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div>
+          </div>
+        </div>
+      </section>
+    </main>
   </div>
   </body></html>`);
 });
