@@ -494,6 +494,21 @@ app.get('/menu', (req, res) => {
   res.send(renderAdminPage({ R, PHONE_NUMBER_ID, orders, page: 'menu' }));
 });
 
+app.get('/settings', (req, res) => {
+  res.send(
+    renderAdminPage({
+      R,
+      PHONE_NUMBER_ID,
+      orders,
+      page: 'settings',
+      settingsMeta: {
+        hasAccessToken: Boolean(ACCESS_TOKEN),
+        verifyFromEnv: Boolean(process.env.VERIFY_TOKEN),
+      },
+    })
+  );
+});
+
 app.get('/api/orders', (req, res) => res.json(orders.slice().reverse()));
 
 // ─────────────────────────────────────────────
@@ -504,7 +519,7 @@ app.listen(PORT, () => {
   console.log(`\n╔═══════════════════════════════════════╗`);
   console.log(`║   ${R.name} — WhatsApp Bot       `);
   console.log(`╠═══════════════════════════════════════╣`);
-  console.log(`║  Dashboard : http://localhost:${PORT}  ( /orders  /menu )`);
+  console.log(`║  Dashboard : http://localhost:${PORT}  ( /orders  /menu  /settings )`);
   console.log(`║  Webhook   : http://localhost:${PORT}/webhook`);
   console.log(`╚═══════════════════════════════════════╝\n`);
   if (!PHONE_NUMBER_ID) console.warn(`⚠️  Add META credentials to .env file!\n`);
