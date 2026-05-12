@@ -132,8 +132,13 @@ function phoneDigitsFromWhatsApp(waFrom) {
   return d.length >= 10 ? d.slice(-10) : d;
 }
 
-/** One-message checkout: name + address (| or two lines). Legacy: name + phone + address; or inline 10-digit phone + address. */
-function parseCheckoutDetails(text) {
+/**
+ * One-message checkout: name + address (| or two lines, or "Name, full address…").
+ * Legacy: name + phone + address; or inline 10-digit phone + address.
+ * @param {string} text
+ * @param {object} [menuRecord] when set, avoids treating "B1, …" as a name+address line
+ */
+function parseCheckoutDetails(text, menuRecord) {
   const trimmed = text.trim();
   const lines = trimmed.split(/\n+/).map((l) => l.trim()).filter(Boolean);
   if (lines.length >= 3) {
@@ -148,6 +153,20 @@ function parseCheckoutDetails(text) {
   }
   if (pipeParts.length === 2) {
     return { name: pipeParts[0], phone: '', address: pipeParts[1] };
+  }
+  // Single line: "Sushil Yadav, Lord Krishna Centre, Shikohabad" (very common on phones)
+  const firstComma = trimmed.indexOf(',');
+  if (firstComma > 0 && !trimmed.includes('|') && lines.length === 1) {
+    const maybeName = trimmed.slice(0, firstComma).trim();
+    const maybeAddr = trimmed.slice(firstComma + 1).trim();
+    if (maybeName.length >= 1 && maybeAddr.length >= 5) {
+      const firstWord = maybeName.split(/\s+/)[0].trim().toUpperCase();
+      const firstLooksLikeMenuCode =
+        menuRecord && firstWord && findItemInMenu(menuRecord, firstWord) && maybeName.split(/\s+/).length === 1;
+      if (!firstLooksLikeMenuCode) {
+        return { name: maybeName, phone: '', address: maybeAddr };
+      }
+    }
   }
   const phoneMatch = trimmed.match(/(?:\+91[\s-]?)?([6-9]\d{9})\b/);
   if (phoneMatch) {
@@ -298,7 +317,7 @@ function checkoutAskMsg(cart) {
     `${lines.join('\n')}\n` +
     `*Total:* ${R.currency}${total}\n\n` +
     'Send *name* and *full delivery address* in one message:\n' +
-    '*Name* | *Address*' +
+    '*Name* | *Address* · or *Name, full address*' +
     cartCommandBar()
   );
 }
@@ -373,6 +392,47 @@ async function sendMenuList(to, menuRecord) {
   await sendMsg(to, compactMenuMsg(menuRecord));
 }
 
+/** Build order lines from session cart, save, confirm, clear session. */
+async function completeCheckoutFromParsed(from, s, parsed) {
+  const typedPhone = String(parsed.phone || '').trim().replace(/\D/g, '').slice(-10);
+  s.name = parsed.name;
+  s.phone = typedPhone || phoneDigitsFromWhatsApp(from) || '—';
+  s.address = parsed.address;
+
+  const g = {};
+  s.cart.forEach((i) => {
+    g[i.id] ? g[i.id].qty++ : (g[i.id] = { ...i, qty: 1 });
+  });
+  const items = Object.values(g);
+  const total = items.reduce((sum, i) => sum + i.price * i.qty, 0);
+
+  const saved = await insertOrderFromCheckout({
+    name: s.name,
+    phone: s.phone,
+    whatsapp: from,
+    address: s.address,
+    items,
+    total,
+    currency: R.currency,
+    status: 'Confirmed',
+  });
+
+  if (!saved.ok) {
+    console.error('Order save failed:', saved.message);
+    await sendMsg(
+      from,
+      `⚠️ We couldn’t save your order right now (${saved.message}).\n\nPlease try again in a moment or call us at the restaurant. 🙏`
+    );
+    return;
+  }
+
+  const order = saved.order;
+  console.log(`\n🎉 NEW ORDER #${order.num} — ${order.name} — ${R.currency}${order.total}`);
+
+  resetSession(from);
+  await sendMsg(from, confirmMsg(order));
+}
+
 // ─────────────────────────────────────────────
 //  CORE MESSAGE HANDLER
 // ─────────────────────────────────────────────
@@ -390,51 +450,18 @@ async function handleMsg(from, text) {
       resetSession(from);
       return;
     }
-    const parsed = parseCheckoutDetails(text);
+    const parsed = parseCheckoutDetails(text, botMenu);
     if (!parsed || parsed.address.length < 5) {
       await sendMsg(
         from,
         `⚠️ Send *name* and *full address* in one message:\n` +
-          `*Name* | *Address*` +
+          `*Name* | *Address*\n` +
+          `or *Name, full address* (comma is fine)` +
           cartCommandBar()
       );
       return;
     }
-    const typedPhone = String(parsed.phone || '').trim().replace(/\D/g, '').slice(-10);
-    s.name = parsed.name;
-    s.phone = typedPhone || phoneDigitsFromWhatsApp(from) || '—';
-    s.address = parsed.address;
-
-    const g = {};
-    s.cart.forEach(i => { g[i.id] ? g[i.id].qty++ : (g[i.id] = {...i, qty:1}); });
-    const items = Object.values(g);
-    const total = items.reduce((sum, i) => sum + i.price * i.qty, 0);
-
-    const saved = await insertOrderFromCheckout({
-      name: s.name,
-      phone: s.phone,
-      whatsapp: from,
-      address: s.address,
-      items,
-      total,
-      currency: R.currency,
-      status: 'Confirmed',
-    });
-
-    if (!saved.ok) {
-      console.error('Order save failed:', saved.message);
-      await sendMsg(
-        from,
-        `⚠️ We couldn’t save your order right now (${saved.message}).\n\nPlease try again in a moment or call us at the restaurant. 🙏`
-      );
-      return;
-    }
-
-    const order = saved.order;
-    console.log(`\n🎉 NEW ORDER #${order.num} — ${order.name} — ${R.currency}${order.total}`);
-
-    resetSession(from);
-    await sendMsg(from, confirmMsg(order));
+    await completeCheckoutFromParsed(from, s, parsed);
     return;
   }
 
@@ -539,6 +566,17 @@ async function handleMsg(from, text) {
   if (addedSlots.length > 0) {
     await sendMsg(from, formatAddedToCartReply(addedSlots, unknown, s.cart));
     return;
+  }
+  // Comma-separated name + address was split into "unknown" tokens — still complete checkout if cart is ready
+  if (unknown.length > 0 && s.cart.length > 0 && open) {
+    const cartTotal = s.cart.reduce((sum, i) => sum + i.price, 0);
+    if (cartTotal >= R.min_order) {
+      const rescue = parseCheckoutDetails(text, botMenu);
+      if (rescue && rescue.address.length >= 5) {
+        await completeCheckoutFromParsed(from, s, rescue);
+        return;
+      }
+    }
   }
   if (unknown.length > 0) {
     await sendMsg(

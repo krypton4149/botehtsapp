@@ -125,3 +125,7 @@ COMMENT ON TABLE public.menu_categories IS 'Restaurant menu sections shown in Wh
 COMMENT ON TABLE public.menu_items IS 'Menu rows; id is the customer-facing item code';
 COMMENT ON TABLE public.orders IS 'Placed orders from WhatsApp checkout';
 COMMENT ON TABLE public.order_items IS 'Line items with price snapshot at order time';
+
+-- Admin dashboard: “Delivery” toggle (idempotent)
+ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS out_for_delivery boolean NOT NULL DEFAULT false;
+COMMENT ON COLUMN public.orders.out_for_delivery IS 'Prepared & out for delivery — set from admin dashboard';
