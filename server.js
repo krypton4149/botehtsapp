@@ -22,7 +22,8 @@ const graphHttpsAgent = new https.Agent({
 });
 const graphHttp = axios.create({
   httpsAgent: graphHttpsAgent,
-  timeout: 25_000,
+  timeout: 12_000,
+  headers: { Connection: 'keep-alive' },
 });
 
 const app = express();
@@ -437,9 +438,14 @@ async function completeCheckoutFromParsed(from, s, parsed) {
 //  CORE MESSAGE HANDLER
 // ─────────────────────────────────────────────
 async function handleMsg(from, text) {
-  const { menu: botMenu } = await getBotMenuRecord(R.menu);
   const upper = text.trim().toUpperCase();
   const s = session(from);
+  /** Menu is only loaded when needed (MENU / item codes / checkout parsing) — saves 1–2 DB round-trips on HI, TRACK, CART, etc. */
+  let menuPromise = null;
+  const loadBotMenu = async () => {
+    if (!menuPromise) menuPromise = getBotMenuRecord(R.menu).then((r) => r.menu);
+    return menuPromise;
+  };
 
   console.log(`📩 [${from}] "${text}" | state: ${s.state}`);
 
@@ -450,6 +456,7 @@ async function handleMsg(from, text) {
       resetSession(from);
       return;
     }
+    const botMenu = await loadBotMenu();
     const parsed = parseCheckoutDetails(text, botMenu);
     if (!parsed || parsed.address.length < 5) {
       await sendMsg(
@@ -510,7 +517,7 @@ async function handleMsg(from, text) {
 
   // ── MENU ──
   if (upper === 'MENU' || upper === 'SHOW MENU') {
-    await sendMenuList(from, botMenu);
+    await sendMenuList(from, await loadBotMenu());
     return;
   }
 
@@ -558,6 +565,7 @@ async function handleMsg(from, text) {
   }
 
   // ── PARSE ITEM CODES (e.g. B1 I4 D1, B1x2, 2xB1) ──
+  const botMenu = await loadBotMenu();
   const { addedSlots, unknown } = parseOrderLineTokens(text, botMenu);
   for (const { item, qty } of addedSlots) {
     for (let q = 0; q < qty; q++) s.cart.push({ ...item });
@@ -603,7 +611,7 @@ async function processWebhookPayload(body) {
     }
 
     if (msg.type === 'interactive' && msg.interactive.type === 'list_reply') {
-      const { menu: botMenu } = await getBotMenuRecord(R.menu);
+      const botMenu = (await getBotMenuRecord(R.menu)).menu;
       const itemId = msg.interactive.list_reply.id;
       const item = findItemInMenu(botMenu, itemId);
       if (item) {
@@ -751,4 +759,7 @@ app.listen(PORT, () => {
   console.log(`║  Webhook   : http://localhost:${PORT}/webhook`);
   console.log(`╚═══════════════════════════════════════╝\n`);
   if (!PHONE_NUMBER_ID) console.warn(`⚠️  Add META credentials to .env file!\n`);
+  setImmediate(() => {
+    getBotMenuRecord(R.menu).catch(() => {});
+  });
 });
