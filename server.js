@@ -20,9 +20,9 @@ app.use(express.json());
 //  ✏️  RESTAURANT CONFIG — EDIT THIS SECTION
 // ─────────────────────────────────────────────
 const R = {
-  name:          "My Restaurant",
+  name:          "MaaJaanki Restaurant",
   tagline:       "Fresh Food, Fast Delivery",
-  address:       "123 MG Road, New Delhi - 110001",
+  address:       "Shikohabad Rd, near Tiwariya Chauraha, Shikohabad, Uttar Pradesh 283135",
   timing:        "11:00 AM – 11:00 PM (All days)",
   currency:      "₹",
   delivery_time: "30–45 minutes",
@@ -94,6 +94,32 @@ function session(id) {
 
 function resetSession(id) {
   sessions.set(id, { state:'idle', cart:[], name:'', phone:'', address:'' });
+}
+
+/** One-message checkout: multiline (name / phone / address), pipe-separated, or name + 10-digit phone + rest as address. */
+function parseCheckoutDetails(text) {
+  const trimmed = text.trim();
+  const lines = trimmed.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length >= 3) {
+    return { name: lines[0], phone: lines[1], address: lines.slice(2).join(', ') };
+  }
+  const pipeParts = trimmed.split('|').map((p) => p.trim()).filter(Boolean);
+  if (pipeParts.length >= 3) {
+    return { name: pipeParts[0], phone: pipeParts[1], address: pipeParts.slice(2).join(' | ') };
+  }
+  const phoneMatch = trimmed.match(/(?:\+91[\s-]?)?([6-9]\d{9})\b/);
+  if (phoneMatch) {
+    const phone = phoneMatch[1];
+    const full = phoneMatch[0];
+    const idx = trimmed.indexOf(full);
+    const before = trimmed.slice(0, idx).trim().replace(/[,;]+$/u, '');
+    const after = trimmed.slice(idx + full.length).trim().replace(/^[,;\s]+/u, '');
+    const name = before || 'Customer';
+    if (after.length >= 5) {
+      return { name, phone, address: after };
+    }
+  }
+  return null;
 }
 
 function findItem(code) {
@@ -247,29 +273,19 @@ async function handleMsg(from, text) {
 
   console.log(`📩 [${from}] "${text}" | state: ${s.state}`);
 
-  // ── AWAITING NAME ──
-  if (s.state === 'awaiting_name') {
-    s.name = text.trim();
-    s.state = 'awaiting_phone';
-    await sendMsg(from, `Got it, *${s.name}!* 👍\n\nPlease share your *phone number* for delivery confirmation:`);
-    return;
-  }
-
-  // ── AWAITING PHONE ──
-  if (s.state === 'awaiting_phone') {
-    s.phone = text.trim();
-    s.state = 'awaiting_address';
-    await sendMsg(from, `Perfect! 📱\n\nNow please send your *full delivery address*\n(Include area, landmark & pincode):`);
-    return;
-  }
-
-  // ── AWAITING ADDRESS ──
-  if (s.state === 'awaiting_address') {
-    if (text.trim().length < 5) {
-      await sendMsg(from, `⚠️ Please send a complete address with area and pincode.`);
+  // ── AWAITING NAME + PHONE + ADDRESS (one reply) ──
+  if (s.state === 'awaiting_checkout_details') {
+    const parsed = parseCheckoutDetails(text);
+    if (!parsed || parsed.address.length < 5) {
+      await sendMsg(
+        from,
+        `⚠️ Please send *name*, *phone*, and *full address* in *one message*.\n\nExamples:\n• Three lines:\n  _Rahul_\n  _9876543210_\n  _12 MG Road, Delhi 110001_\n• Or one line: _Rahul 9876543210 12 MG Road, Delhi 110001_`
+      );
       return;
     }
-    s.address = text.trim();
+    s.name = parsed.name;
+    s.phone = parsed.phone;
+    s.address = parsed.address;
 
     const g = {};
     s.cart.forEach(i => { g[i.id] ? g[i.id].qty++ : (g[i.id] = {...i, qty:1}); });
@@ -299,7 +315,7 @@ async function handleMsg(from, text) {
   // ── GREETINGS ──
   const greet = ['HI','HELLO','HEY','NAMASTE','START','HAI','HELO','SALAM','NAMASKAR'];
   if (greet.includes(upper)) {
-    await sendMsg(from, `Namaste! 🙏 Welcome to *${R.name}!*\n\nI'm your food ordering assistant. Here's what you can do:\n\n• See menu & order food 🍽️\n• Track your orders 📦\n• Get delivery info 📍\n\nType *MENU* to see our full menu!`);
+    await sendMsg(from, `Welcome to *${R.name}!*\n\nI'm your food ordering assistant. Here's what you can do:\n\n• See menu & order food 🍽️\n• Track your orders 📦\n• Get delivery info 📍\n\nType *MENU* to see our full menu!`);
     return;
   }
 
@@ -341,8 +357,11 @@ async function handleMsg(from, text) {
       await sendMsg(from, `⚠️ Minimum order is *${R.currency}${R.min_order}*\nYour cart total: *${R.currency}${total}*\n\nPlease add ${R.currency}${R.min_order - total} more.\nType *MENU* to add items.`);
       return;
     }
-    s.state = 'awaiting_name';
-    await sendMsg(from, `🎉 Let's place your order!\n\n${cartMsg(s.cart)}\n\n━━━━━━━━━━━━━━━━\n*Step 1/3* — Please enter your *full name*:`);
+    s.state = 'awaiting_checkout_details';
+    await sendMsg(
+      from,
+      `🎉 Let's place your order!\n\n${cartMsg(s.cart)}\n\n━━━━━━━━━━━━━━━━\nGive me your *name*, *number* and *address* — *order details*.`
+    );
     return;
   }
 
@@ -360,7 +379,7 @@ async function handleMsg(from, text) {
 
   // ── HELP ──
   if (upper === 'HELP' || upper === '?') {
-    await sendMsg(from, `🤖 *${R.name} Bot Help*\n\n*Commands:*\n• *HI* — Start\n• *MENU* — View full menu\n• *P1 B2 D1* — Add items to cart\n• *CART* — View cart & total\n• *ORDER* — Place your order\n• *REMOVE* — Remove last item\n• *CLEAR* — Empty cart\n• *TRACK* — Track your order\n• *HELP* — Show this help\n\n📍 ${R.address}\n🕐 ${R.timing}`);
+    await sendMsg(from, `🤖 *${R.name} Bot Help*\n\n*Commands:*\n• *MENU* — View full menu\n• *P1 B2 D1* — Add items to cart\n• *CART* — View cart & total\n• *ORDER* — Place your order\n• *REMOVE* — Remove last item\n• *CLEAR* — Empty cart\n• *TRACK* — Track your order\n• *HELP* — Show this help\n\n📍 ${R.address}\n🕐 ${R.timing}`);
     return;
   }
 
@@ -389,7 +408,7 @@ async function handleMsg(from, text) {
   }
 
   // ── DEFAULT ──
-  await sendMsg(from, `👋 I didn't understand that.\n\nType *HI* to start\nType *MENU* to see our menu\nType *HELP* for all commands\n\n— *${R.name}* 🍽️`);
+  await sendMsg(from, `👋 I didn't understand that.\n\nType *MENU* to see our menu\nType *HELP* for all commands\n\n— *${R.name}* 🍽️`);
 }
 
 // ─────────────────────────────────────────────
