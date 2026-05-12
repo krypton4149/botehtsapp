@@ -11,7 +11,19 @@
 require('dotenv').config();
 const express = require('express');
 const axios   = require('axios');
+const https   = require('https');
 const fs      = require('fs');
+
+/** Reused TLS connections to graph.facebook.com — much faster than one cold handshake per reply. */
+const graphHttpsAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 60_000,
+  maxSockets: 64,
+});
+const graphHttp = axios.create({
+  httpsAgent: graphHttpsAgent,
+  timeout: 25_000,
+});
 
 const app = express();
 app.use(express.json());
@@ -207,7 +219,7 @@ function confirmMsg(order) {
 // ─────────────────────────────────────────────
 async function sendMsg(to, text) {
   try {
-    await axios.post(API_URL, {
+    await graphHttp.post(API_URL, {
       messaging_product: "whatsapp",
       recipient_type: "individual",
       to,
@@ -237,7 +249,7 @@ async function sendMenuList(to) {
   }));
 
   try {
-    await axios.post(API_URL, {
+    await graphHttp.post(API_URL, {
       messaging_product: "whatsapp",
       recipient_type: "individual",
       to,
@@ -411,6 +423,33 @@ async function handleMsg(from, text) {
   await sendMsg(from, `👋 I didn't understand that.\n\nType *MENU* to see our menu\nType *HELP* for all commands\n\n— *${R.name}* 🍽️`);
 }
 
+async function processWebhookPayload(body) {
+  const entry   = body.entry?.[0];
+  const changes = entry?.changes?.[0];
+  const value   = changes?.value;
+
+  if (!value?.messages) return;
+
+  for (const msg of value.messages) {
+    const from = msg.from;
+
+    if (msg.type === 'text') {
+      await handleMsg(from, msg.text.body);
+    }
+
+    if (msg.type === 'interactive' && msg.interactive.type === 'list_reply') {
+      const itemId = msg.interactive.list_reply.id;
+      const item   = findItem(itemId);
+      if (item) {
+        const s = session(from);
+        s.cart.push(item);
+        const total = s.cart.reduce((sum, i) => sum + i.price, 0);
+        await sendMsg(from, `✅ *Added:* ${item.name} — ${R.currency}${item.price}\n\n🛒 *${s.cart.length} item(s)* | Total: *${R.currency}${total}*\n\nType *CART* to review\nType *ORDER* to checkout\nType *MENU* to add more`);
+      }
+    }
+  }
+}
+
 // ─────────────────────────────────────────────
 //  WEBHOOK ENDPOINTS
 // ─────────────────────────────────────────────
@@ -430,39 +469,12 @@ app.get('/webhook', (req, res) => {
 });
 
 // Receive messages
-app.post('/webhook', async (req, res) => {
-  res.sendStatus(200); // Always respond 200 to Meta immediately
-
-  try {
-    const entry   = req.body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value   = changes?.value;
-
-    if (!value?.messages) return;
-
-    for (const msg of value.messages) {
-      const from = msg.from;
-
-      // Text message
-      if (msg.type === 'text') {
-        await handleMsg(from, msg.text.body);
-      }
-
-      // Interactive list reply (customer tapped a menu item)
-      if (msg.type === 'interactive' && msg.interactive.type === 'list_reply') {
-        const itemId = msg.interactive.list_reply.id;
-        const item   = findItem(itemId);
-        if (item) {
-          const s = session(from);
-          s.cart.push(item);
-          const total = s.cart.reduce((sum, i) => sum + i.price, 0);
-          await sendMsg(from, `✅ *Added:* ${item.name} — ${R.currency}${item.price}\n\n🛒 *${s.cart.length} item(s)* | Total: *${R.currency}${total}*\n\nType *CART* to review\nType *ORDER* to checkout\nType *MENU* to add more`);
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Webhook error:', err.message);
-  }
+app.post('/webhook', (req, res) => {
+  res.sendStatus(200);
+  const body = req.body;
+  setImmediate(() => {
+    processWebhookPayload(body).catch((err) => console.error('Webhook error:', err.message));
+  });
 });
 
 // ─────────────────────────────────────────────
