@@ -124,16 +124,29 @@ function resetSession(id) {
   sessions.set(id, { state:'idle', cart:[], name:'', phone:'', address:'' });
 }
 
-/** One-message checkout: multiline (name / phone / address), pipe-separated, or name + 10-digit phone + rest as address. */
+/** Last 10 digits from WhatsApp sender id (DB phone is NOT NULL when customer omits phone). */
+function phoneDigitsFromWhatsApp(waFrom) {
+  const d = String(waFrom || '').replace(/\D/g, '');
+  if (!d.length) return '';
+  return d.length >= 10 ? d.slice(-10) : d;
+}
+
+/** One-message checkout: name + address (| or two lines). Legacy: name + phone + address; or inline 10-digit phone + address. */
 function parseCheckoutDetails(text) {
   const trimmed = text.trim();
   const lines = trimmed.split(/\n+/).map((l) => l.trim()).filter(Boolean);
   if (lines.length >= 3) {
     return { name: lines[0], phone: lines[1], address: lines.slice(2).join(', ') };
   }
+  if (lines.length === 2) {
+    return { name: lines[0], phone: '', address: lines[1] };
+  }
   const pipeParts = trimmed.split('|').map((p) => p.trim()).filter(Boolean);
   if (pipeParts.length >= 3) {
     return { name: pipeParts[0], phone: pipeParts[1], address: pipeParts.slice(2).join(' | ') };
+  }
+  if (pipeParts.length === 2) {
+    return { name: pipeParts[0], phone: '', address: pipeParts[1] };
   }
   const phoneMatch = trimmed.match(/(?:\+91[\s-]?)?([6-9]\d{9})\b/);
   if (phoneMatch) {
@@ -283,10 +296,8 @@ function checkoutAskMsg(cart) {
     '📋 *Your cart:*\n' +
     `${lines.join('\n')}\n` +
     `*Total:* ${R.currency}${total}\n\n` +
-    '📝 *One message* — name, phone, full address:\n' +
-    '*Name* | *Phone* | *Address*\n\n' +
-    '*Example:*\n' +
-    '_Piyush | 9876543210 | 12 Gandhi Nagar, Shikohabad_' +
+    'Send *name* and *full delivery address* in one message:\n' +
+    '*Name* | *Address*' +
     cartCommandBar()
   );
 }
@@ -324,7 +335,7 @@ function confirmMsg(order) {
     `✅ *Order #${order.num}*\n` +
     `💰 *${R.currency}${order.total}* · ${paymentShort()}\n` +
     `⏱️ *${deliveryShort()}*\n\n` +
-    `👤 ${order.name} · 📞 ${order.phone}\n` +
+    `👤 ${order.name}\n` +
     `📍 ${order.address}\n\n` +
     `🛍️ ${names}\n\n` +
     `🙏 Thanks! We'll call to confirm.\n\n` +
@@ -371,7 +382,7 @@ async function handleMsg(from, text) {
 
   console.log(`📩 [${from}] "${text}" | state: ${s.state}`);
 
-  // ── AWAITING NAME + PHONE + ADDRESS (one reply) ──
+  // ── AWAITING NAME + ADDRESS (one reply); optional legacy phone in message ──
   if (s.state === 'awaiting_checkout_details') {
     if (!isRestaurantOpen()) {
       await sendMsg(from, closedOrderMsg());
@@ -382,16 +393,15 @@ async function handleMsg(from, text) {
     if (!parsed || parsed.address.length < 5) {
       await sendMsg(
         from,
-        `⚠️ *One message* with name, phone & address:\n` +
-          `*Name* | *Phone* | *Address*\n\n` +
-          '*Example:*\n' +
-          '_Piyush | 9876543210 | 12 Gandhi Nagar, Shikohabad_' +
+        `⚠️ Send *name* and *full address* in one message:\n` +
+          `*Name* | *Address*` +
           cartCommandBar()
       );
       return;
     }
+    const typedPhone = String(parsed.phone || '').trim().replace(/\D/g, '').slice(-10);
     s.name = parsed.name;
-    s.phone = parsed.phone;
+    s.phone = typedPhone || phoneDigitsFromWhatsApp(from) || '—';
     s.address = parsed.address;
 
     const g = {};
@@ -463,8 +473,9 @@ async function handleMsg(from, text) {
   if (greet.includes(upper)) {
     await sendMsg(
       from,
-      `👋 *${R.chatBrand}* · ${R.hoursShort} · min *${R.currency}${R.min_order}* · 📍 ${R.areaShort}\n\n` +
-        `Skip *MENU* — send codes: *B1 I4 D1* or *B1x2* for two.`
+      `👋 Welcome to *${R.chatBrand}*!\n\n` +
+        `🕐 ${R.hoursShort} | Min order *${R.currency}${R.min_order}* | 📍 ${R.areaShort}\n\n` +
+        `Reply *MENU* to see our menu`
     );
     return;
   }

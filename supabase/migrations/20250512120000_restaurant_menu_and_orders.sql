@@ -88,8 +88,38 @@ CREATE POLICY "Public read active menu_items"
   TO anon, authenticated
   USING (active = true);
 
--- Orders: no anon/authenticated policies — use service_role on the server for reads/writes
--- (service_role bypasses RLS). If you only use the publishable key, add a secure Edge Function.
+-- Orders / order_items: allow backend (anon JWT = publishable key) to read/write when key is server-only.
+-- Prefer SUPABASE_SERVICE_ROLE_KEY in production (bypasses RLS).
+DROP POLICY IF EXISTS "orders_backend_select" ON public.orders;
+CREATE POLICY "orders_backend_select"
+  ON public.orders FOR SELECT
+  TO anon, authenticated
+  USING (true);
+
+DROP POLICY IF EXISTS "orders_backend_insert" ON public.orders;
+CREATE POLICY "orders_backend_insert"
+  ON public.orders FOR INSERT
+  TO anon, authenticated
+  WITH CHECK (true);
+
+DROP POLICY IF EXISTS "order_items_backend_select" ON public.order_items;
+CREATE POLICY "order_items_backend_select"
+  ON public.order_items FOR SELECT
+  TO anon, authenticated
+  USING (true);
+
+DROP POLICY IF EXISTS "order_items_backend_insert" ON public.order_items;
+CREATE POLICY "order_items_backend_insert"
+  ON public.order_items FOR INSERT
+  TO anon, authenticated
+  WITH CHECK (true);
+
+DROP POLICY IF EXISTS "orders_backend_update" ON public.orders;
+CREATE POLICY "orders_backend_update"
+  ON public.orders FOR UPDATE
+  TO anon, authenticated
+  USING (true)
+  WITH CHECK (true);
 
 COMMENT ON TABLE public.menu_categories IS 'Restaurant menu sections shown in WhatsApp / admin';
 COMMENT ON TABLE public.menu_items IS 'Menu rows; id is the customer-facing item code';
