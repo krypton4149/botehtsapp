@@ -30,12 +30,24 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 const { isRestaurantOpen } = require('./lib/restaurant-hours');
+const {
+  fetchOrdersForDashboard,
+  insertOrderFromCheckout,
+  fetchOrdersByWhatsapp,
+} = require('./lib/supabase-orders');
+const { renderAdminPage } = require('./lib/admin-dashboard');
+const { fetchMenuGroupedByCategory, getBotMenuRecord } = require('./lib/supabase-menu');
 
 // ─────────────────────────────────────────────
 //  ✏️  RESTAURANT CONFIG — EDIT THIS SECTION
 // ─────────────────────────────────────────────
 const R = {
   name:          "Maa Jaanki Restaurant",
+  /** Customer-facing name in WhatsApp messages */
+  chatBrand:     "MaaJaanki Restaurant",
+  /** One-line hours + area for welcome (edit to match your hours) */
+  hoursShort:    "11 AM – 11 PM",
+  areaShort:     "Shikohabad",
   tagline:       "Fresh Food, Fast Delivery",
   /** Shown in admin sidebar; replace with your own file under /public/ if you like. */
   logoUrl:       "/logo.svg",
@@ -46,6 +58,7 @@ const R = {
   payment:       "Cash on Delivery / UPI on Delivery",
   min_order:     199,
 
+  /** Fallback when Supabase has no menu rows; bot uses DB when available (see getBotMenuRecord). */
   menu: {
     "🍕 Pizza": [
       { id:"P1",  name:"Margherita Pizza",      price:249, veg:true  },
@@ -96,11 +109,9 @@ const VERIFY_TOKEN    = process.env.VERIFY_TOKEN || "restaurant_bot_2024";
 const API_URL         = `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`;
 
 // ─────────────────────────────────────────────
-//  SESSION & ORDER STORAGE
+//  SESSION STORAGE (orders live in Supabase — see lib/supabase-orders.js)
 // ─────────────────────────────────────────────
 const sessions = new Map();
-let   orders   = [];
-let   orderNum = 1000;
 
 function session(id) {
   if (!sessions.has(id)) {
@@ -139,17 +150,60 @@ function parseCheckoutDetails(text) {
   return null;
 }
 
-function findItem(code) {
-  for (const items of Object.values(R.menu)) {
-    const f = items.find(i => i.id.toUpperCase() === code.toUpperCase());
+function findItemInMenu(menuRecord, code) {
+  const u = String(code).trim().toUpperCase();
+  for (const items of Object.values(menuRecord)) {
+    const f = items.find((i) => String(i.id).toUpperCase() === u);
     if (f) return f;
   }
   return null;
 }
 
+/** e.g. B1, B1x2, 2xB1 → { code, qty } */
+function parseOneOrderToken(part) {
+  const t = String(part).trim().toUpperCase().replace(/\s+/g, '');
+  if (!t || t.length > 12) return null;
+  let m = t.match(/^(\d{1,2})[X*]([A-Z][A-Z0-9]{0,4})$/);
+  if (m) {
+    const qty = Math.min(99, Math.max(1, parseInt(m[1], 10)));
+    return { code: m[2], qty };
+  }
+  m = t.match(/^([A-Z][A-Z0-9]{0,4})[X*](\d{1,2})$/);
+  if (m) {
+    const qty = Math.min(99, Math.max(1, parseInt(m[2], 10)));
+    return { code: m[1], qty };
+  }
+  m = t.match(/^([A-Z][A-Z0-9]{0,4})$/);
+  if (m) return { code: m[1], qty: 1 };
+  return null;
+}
+
+function parseOrderLineTokens(text, menuRecord) {
+  const upper = String(text).trim().toUpperCase();
+  const rawParts = upper.split(/[\s,،]+/).filter(Boolean);
+  const addedSlots = [];
+  const unknown = [];
+  const skipUnknown = /^(I|A|THE|AND|OR|OF|IS|IN|OK|NO|YES|HI|HEY|HELLO)$/i;
+
+  for (const part of rawParts) {
+    const parsed = parseOneOrderToken(part);
+    if (!parsed) {
+      if (part.length >= 2 && !skipUnknown.test(part)) unknown.push(part);
+      continue;
+    }
+    const item = findItemInMenu(menuRecord, parsed.code);
+    if (item) {
+      addedSlots.push({ item, qty: parsed.qty });
+    } else if (parsed.code.length >= 2 && !/^(I|A|THE|AND|OR|OF|IS|IN)$/.test(parsed.code)) {
+      unknown.push(part);
+    }
+  }
+  return { addedSlots, unknown };
+}
+
 function closedOrderMsg() {
   return (
-    `🕚 *${R.name}* is closed right now.\n\n` +
+    `🕚 *${R.chatBrand}* is closed right now.\n\n` +
     `We take orders *11 AM – 11 PM* (India time).\n` +
     `Please message again after we open — we’d love to serve you! 🙏\n\n` +
     `_Type *TRACK* for a past order._`
@@ -159,73 +213,124 @@ function closedOrderMsg() {
 // ─────────────────────────────────────────────
 //  MESSAGE BUILDERS
 // ─────────────────────────────────────────────
-function menuMsg() {
-  let m = `━━━━━━━━━━━━━━━━━━━━━\n`;
-  m += `🍽️ *${R.name}*\n`;
-  m += `_${R.tagline}_\n`;
-  m += `━━━━━━━━━━━━━━━━━━━━━\n`;
-  m += `📍 ${R.address}\n`;
-  m += `🕐 ${R.timing}\n\n`;
 
-  for (const [cat, items] of Object.entries(R.menu)) {
-    m += `*${cat}*\n`;
-    items.forEach(i => {
-      m += `  ${i.veg ? '🟢' : '🔴'} [*${i.id}*] ${i.name} — *${R.currency}${i.price}*\n`;
-    });
-    m += `\n`;
+function menuLineShortName(name) {
+  let n = String(name).trim();
+  n = n.replace(/\s+Pizza$/i, '').replace(/\s+Burger$/i, '').replace(/\s+Pasta$/i, '');
+  if (n.length > 28) n = `${n.slice(0, 26)}…`;
+  return n;
+}
+
+/** Compact text menu (MENU command). */
+function compactMenuMsg(menuRecord) {
+  let m = '🍽️ *MaaJaanki Menu*\n\n';
+  const entries = Object.entries(menuRecord).filter(([, items]) => items && items.length);
+  if (!entries.length) {
+    return `${m}_Menu is updating — please try again in a moment._`;
   }
-
-  m += `🟢 Veg  🔴 Non-Veg\n`;
-  m += `Min order: *${R.currency}${R.min_order}*\n\n`;
-  m += `━━━━━━━━━━━━━━━━━━━━━\n`;
-  m += `*📝 HOW TO ORDER:*\n`;
-  m += `Type item codes: *P1 B2 D1*\n\n`;
-  m += `*COMMANDS:*\n`;
-  m += `• *CART* — View cart\n`;
-  m += `• *ORDER* — Checkout\n`;
-  m += `• *REMOVE* — Remove last item\n`;
-  m += `• *CLEAR* — Empty cart\n`;
-  m += `• *MENU* — Show menu\n`;
-  m += `• *TRACK* — Track your order\n`;
+  for (const [cat, items] of entries) {
+    m += `*${cat}*\n`;
+    const parts = items.map(
+      (i) =>
+        `${String(i.id).toUpperCase()} ${menuLineShortName(i.name)} ${R.currency}${i.price} ${i.veg ? '🟢' : '🔴'}`
+    );
+    m += `${parts.join(' | ')}\n\n`;
+  }
+  m += '🟢 Veg   🔴 Non-veg\n\n';
+  m += '👉 *B1 I4 D1* · *B1x2* = two of the same item';
   return m;
+}
+
+/** Bottom bar on cart-related replies (WhatsApp). */
+function cartCommandBar() {
+  return '\n\n_*ORDER* · *CART* · *MENU*_';
+}
+
+function cartBodyFromCart(cart) {
+  const g = {};
+  cart.forEach((i) => {
+    g[i.id] ? g[i.id].qty++ : (g[i.id] = { ...i, qty: 1 });
+  });
+  const lines = [];
+  let total = 0;
+  Object.values(g).forEach((i) => {
+    const sub = i.price * i.qty;
+    total += sub;
+    lines.push(`• ${i.name} × ${i.qty} = ${R.currency}${sub}`);
+  });
+  return { lines, total };
 }
 
 function cartMsg(cart) {
-  if (!cart.length) return `🛒 Your cart is *empty!*\n\nType item codes like *P1 B2* to add items.\nType *MENU* to browse.`;
-
-  const g = {};
-  cart.forEach(i => { g[i.id] ? g[i.id].qty++ : (g[i.id] = {...i, qty:1}); });
-  let total = 0;
-  let m = `🛒 *Your Cart:*\n━━━━━━━━━━━━━━━━\n`;
-  Object.values(g).forEach(i => {
-    const sub = i.price * i.qty;
-    total += sub;
-    m += `• ${i.name}\n  ${i.qty} × ${R.currency}${i.price} = *${R.currency}${sub}*\n`;
-  });
-  m += `━━━━━━━━━━━━━━━━\n`;
-  m += `*TOTAL: ${R.currency}${total}*\n\n`;
-  if (total < R.min_order) m += `⚠️ Min order: ${R.currency}${R.min_order} (add ${R.currency}${R.min_order - total} more)\n\n`;
-  m += `Type *ORDER* to checkout ✅\nType *CLEAR* to reset 🗑️`;
+  if (!cart.length) {
+    return `📋 Cart empty — *B1 I4* · *B1x2* · *MENU*${cartCommandBar()}`;
+  }
+  const { lines, total } = cartBodyFromCart(cart);
+  let m = '📋 *Your cart:*\n';
+  m += `${lines.join('\n')}\n`;
+  m += `*Total:* ${R.currency}${total}`;
+  if (total < R.min_order) {
+    m += `\n\n⚠️ Min *${R.currency}${R.min_order}* — add *${R.currency}${R.min_order - total}* more.`;
+  }
+  m += cartCommandBar();
   return m;
 }
 
-function confirmMsg(order) {
-  let m = `✅ *ORDER CONFIRMED!*\n`;
-  m += `━━━━━━━━━━━━━━━━━━━━━\n`;
-  m += `🔖 Order *#${order.num}*\n\n`;
-  m += `👤 ${order.name}\n`;
-  m += `📱 ${order.phone}\n`;
-  m += `📍 ${order.address}\n\n`;
-  m += `*Your Order:*\n`;
-  order.items.forEach(i => m += `• ${i.name} ×${i.qty} = ${R.currency}${i.price*i.qty}\n`);
-  m += `━━━━━━━━━━━━━━━━━━━━━\n`;
-  m += `💰 *Total: ${R.currency}${order.total}*\n`;
-  m += `💳 ${R.payment}\n`;
-  m += `⏱️ Delivery: ${R.delivery_time}\n\n`;
-  m += `🙏 Thank you for ordering from *${R.name}!*\n`;
-  m += `We'll call you to confirm shortly.\n\n`;
-  m += `Type *TRACK* to track your order\nType *MENU* to order again`;
+/** After ORDER: show cart + ask for details (pipe or lines). */
+function checkoutAskMsg(cart) {
+  const { lines, total } = cartBodyFromCart(cart);
+  return (
+    '📋 *Your cart:*\n' +
+    `${lines.join('\n')}\n` +
+    `*Total:* ${R.currency}${total}\n\n` +
+    '📝 *One message* — name, phone, full address:\n' +
+    '*Name* | *Phone* | *Address*\n\n' +
+    '*Example:*\n' +
+    '_Piyush | 9876543210 | 12 Gandhi Nagar, Shikohabad_' +
+    cartCommandBar()
+  );
+}
+
+function formatAddedToCartReply(addedSlots, unknown, cart) {
+  const lines = addedSlots.map(({ item, qty }) =>
+    qty > 1
+      ? `✅ ${item.name} ×${qty} — ${R.currency}${item.price * qty}`
+      : `✅ ${item.name} — ${R.currency}${item.price}`
+  );
+  const total = cart.reduce((sum, i) => sum + i.price, 0);
+  let m = '🛒 *Added!*\n\n';
+  m += `${lines.join('\n')}\n\n`;
+  m += `*Total:* ${R.currency}${total} (${cart.length} items)`;
+  m += cartCommandBar();
+  if (unknown.length) {
+    m = `⚠️ Not found: ${unknown.join(', ')}\n\n${m}`;
+  }
   return m;
+}
+
+function deliveryShort() {
+  return String(R.delivery_time).replace(/\s*minutes?/i, ' min').trim();
+}
+
+function paymentShort() {
+  const p = String(R.payment);
+  if (/cash on delivery/i.test(p) && /upi/i.test(p)) return 'COD / UPI on delivery';
+  return p;
+}
+
+function confirmMsg(order) {
+  const names = order.items.map((i) => (i.qty > 1 ? `${i.name} ×${i.qty}` : i.name)).join(' · ');
+  return (
+    `✅ *Order #${order.num}*\n` +
+    `💰 *${R.currency}${order.total}* · ${paymentShort()}\n` +
+    `⏱️ *${deliveryShort()}*\n\n` +
+    `👤 ${order.name} · 📞 ${order.phone}\n` +
+    `📍 ${order.address}\n\n` +
+    `🛍️ ${names}\n\n` +
+    `🙏 Thanks! We'll call to confirm.\n\n` +
+    `*TRACK* — order status` +
+    cartCommandBar()
+  );
 }
 
 // ─────────────────────────────────────────────
@@ -251,49 +356,16 @@ async function sendMsg(to, text) {
   }
 }
 
-// Send interactive list message (Meta feature — shows a nice menu list!)
-async function sendMenuList(to) {
-  const sections = Object.entries(R.menu).slice(0,9).map(([title, items]) => ({
-    title: title.replace(/[^\w\s]/g,'').trim().substring(0,24),
-    rows: items.slice(0,9).map(i => ({
-      id: i.id,
-      title: i.name.substring(0,24),
-      description: `${i.veg ? 'Veg' : 'Non-Veg'} · ${R.currency}${i.price}`
-    }))
-  }));
-
-  try {
-    await graphHttp.post(API_URL, {
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to,
-      type: "interactive",
-      interactive: {
-        type: "list",
-        header: { type:"text", text: `🍽️ ${R.name}` },
-        body:   { text: `Welcome! Browse our menu below and tap to add items to your cart.\n\nOr type item codes directly (e.g. *P1 B2 D1*)` },
-        footer: { text: `${R.timing} · Min order: ${R.currency}${R.min_order}` },
-        action: {
-          button: "📋 View Menu",
-          sections
-        }
-      }
-    }, {
-      headers: {
-        Authorization: `Bearer ${ACCESS_TOKEN}`,
-        "Content-Type": "application/json"
-      }
-    });
-  } catch (err) {
-    // Fallback to text menu if interactive fails
-    await sendMsg(to, menuMsg());
-  }
+// Text menu only (compact format for WhatsApp).
+async function sendMenuList(to, menuRecord) {
+  await sendMsg(to, compactMenuMsg(menuRecord));
 }
 
 // ─────────────────────────────────────────────
 //  CORE MESSAGE HANDLER
 // ─────────────────────────────────────────────
 async function handleMsg(from, text) {
+  const { menu: botMenu } = await getBotMenuRecord(R.menu);
   const upper = text.trim().toUpperCase();
   const s = session(from);
 
@@ -310,7 +382,11 @@ async function handleMsg(from, text) {
     if (!parsed || parsed.address.length < 5) {
       await sendMsg(
         from,
-        `⚠️ Please send *name*, *phone*, and *full address* in *one message*.\n\nExamples:\n• Three lines:\n  _Rahul_\n  _9876543210_\n  _12 MG Road, Delhi 110001_\n• Or one line: _Rahul 9876543210 12 MG Road, Delhi 110001_`
+        `⚠️ *One message* with name, phone & address:\n` +
+          `*Name* | *Phone* | *Address*\n\n` +
+          '*Example:*\n' +
+          '_Piyush | 9876543210 | 12 Gandhi Nagar, Shikohabad_' +
+          cartCommandBar()
       );
       return;
     }
@@ -323,19 +399,27 @@ async function handleMsg(from, text) {
     const items = Object.values(g);
     const total = items.reduce((sum, i) => sum + i.price * i.qty, 0);
 
-    orderNum++;
-    const order = {
-      num: orderNum,
+    const saved = await insertOrderFromCheckout({
       name: s.name,
       phone: s.phone,
       whatsapp: from,
       address: s.address,
       items,
       total,
+      currency: R.currency,
       status: 'Confirmed',
-      time: new Date().toLocaleString('en-IN')
-    };
-    orders.push(order);
+    });
+
+    if (!saved.ok) {
+      console.error('Order save failed:', saved.message);
+      await sendMsg(
+        from,
+        `⚠️ We couldn’t save your order right now (${saved.message}).\n\nPlease try again in a moment or call us at the restaurant. 🙏`
+      );
+      return;
+    }
+
+    const order = saved.order;
     console.log(`\n🎉 NEW ORDER #${order.num} — ${order.name} — ${R.currency}${order.total}`);
 
     resetSession(from);
@@ -345,7 +429,7 @@ async function handleMsg(from, text) {
 
   // ── TRACK / HELP (always, even when closed) ──
   if (upper === 'TRACK' || upper === 'TRACK ORDER') {
-    const myOrders = orders.filter(o => o.whatsapp === from);
+    const myOrders = await fetchOrdersByWhatsapp(from);
     if (!myOrders.length) {
       await sendMsg(from, `📦 No orders found for your number.\n\nType *MENU* to place your first order!`);
       return;
@@ -356,7 +440,14 @@ async function handleMsg(from, text) {
   }
 
   if (upper === 'HELP' || upper === '?') {
-    await sendMsg(from, `🤖 *${R.name} Bot Help*\n\n*Commands:*\n• *MENU* — View full menu\n• *P1 B2 D1* — Add items to cart\n• *CART* — View cart & total\n• *ORDER* — Place your order\n• *REMOVE* — Remove last item\n• *CLEAR* — Empty cart\n• *TRACK* — Track your order\n• *HELP* — Show this help\n\n📍 ${R.address}\n🕐 ${R.timing}`);
+    await sendMsg(
+      from,
+      `*MENU* — View menu   *CART* — View cart\n` +
+        `*ORDER* — Checkout   *TRACK* — Order status\n` +
+        `*REMOVE* — Remove last item   *CLEAR* — Empty cart\n` +
+        `*HELP* — Show this list\n\n` +
+        `📍 ${R.address}\n🕐 ${R.timing}`
+    );
     return;
   }
 
@@ -370,13 +461,17 @@ async function handleMsg(from, text) {
   // ── GREETINGS ──
   const greet = ['HI','HELLO','HEY','NAMASTE','START','HAI','HELO','SALAM','NAMASKAR'];
   if (greet.includes(upper)) {
-    await sendMsg(from, `Welcome to *${R.name}!*\n\nI'm your food ordering assistant. Here's what you can do:\n\n• See menu & order food 🍽️\n• Track your orders 📦\n• Get delivery info 📍\n\nType *MENU* to see our full menu!`);
+    await sendMsg(
+      from,
+      `👋 *${R.chatBrand}* · ${R.hoursShort} · min *${R.currency}${R.min_order}* · 📍 ${R.areaShort}\n\n` +
+        `Skip *MENU* — send codes: *B1 I4 D1* or *B1x2* for two.`
+    );
     return;
   }
 
   // ── MENU ──
   if (upper === 'MENU' || upper === 'SHOW MENU') {
-    await sendMenuList(from);
+    await sendMenuList(from, botMenu);
     return;
   }
 
@@ -389,60 +484,58 @@ async function handleMsg(from, text) {
   // ── CLEAR ──
   if (upper === 'CLEAR' || upper === 'CANCEL') {
     s.cart = [];
-    await sendMsg(from, `🗑️ Cart cleared!\n\nType *MENU* to start fresh.`);
+    await sendMsg(from, `🗑️ Cart cleared.${cartCommandBar()}`);
     return;
   }
 
   // ── REMOVE LAST ──
   if (upper === 'REMOVE' || upper === 'UNDO') {
-    if (!s.cart.length) { await sendMsg(from, `Cart is already empty!`); return; }
+    if (!s.cart.length) {
+      await sendMsg(from, `Cart is empty.${cartCommandBar()}`);
+      return;
+    }
     const removed = s.cart.pop();
-    await sendMsg(from, `✅ Removed: *${removed.name}*\n\nType *CART* to see your cart.`);
+    await sendMsg(from, `✅ Removed *${removed.name}*${cartCommandBar()}`);
     return;
   }
 
   // ── ORDER ──
   if (upper === 'ORDER' || upper === 'CHECKOUT' || upper === 'PLACE ORDER') {
     if (!s.cart.length) {
-      await sendMsg(from, `🛒 Your cart is empty!\n\nType item codes like *P1 B2* to add food.\nType *MENU* to browse.`);
+      await sendMsg(from, `🛒 Cart empty — *B1 I4* or *B1x2*, or *MENU*.${cartCommandBar()}`);
       return;
     }
     const total = s.cart.reduce((sum, i) => sum + i.price, 0);
     if (total < R.min_order) {
-      await sendMsg(from, `⚠️ Minimum order is *${R.currency}${R.min_order}*\nYour cart total: *${R.currency}${total}*\n\nPlease add ${R.currency}${R.min_order - total} more.\nType *MENU* to add items.`);
+      await sendMsg(
+        from,
+        `⚠️ Min *${R.currency}${R.min_order}* — cart *${R.currency}${total}* (add *${R.currency}${R.min_order - total}*).${cartCommandBar()}`
+      );
       return;
     }
     s.state = 'awaiting_checkout_details';
+    await sendMsg(from, checkoutAskMsg(s.cart));
+    return;
+  }
+
+  // ── PARSE ITEM CODES (e.g. B1 I4 D1, B1x2, 2xB1) ──
+  const { addedSlots, unknown } = parseOrderLineTokens(text, botMenu);
+  for (const { item, qty } of addedSlots) {
+    for (let q = 0; q < qty; q++) s.cart.push({ ...item });
+  }
+
+  if (addedSlots.length > 0) {
+    await sendMsg(from, formatAddedToCartReply(addedSlots, unknown, s.cart));
+    return;
+  }
+  if (unknown.length > 0) {
     await sendMsg(
       from,
-      `🎉 Let's place your order!\n\n${cartMsg(s.cart)}\n\n━━━━━━━━━━━━━━━━\nGive me your *name*, *number* and *address* — *order details*.`
+      `⚠️ Not found: ${unknown.join(', ')}\n\nTry *MENU* or codes like *B1 I4 D1*.${cartCommandBar()}`
     );
     return;
   }
-
-  // ── PARSE ITEM CODES (e.g. "P1 B2 D1") ──
-  const codes = upper.split(/[\s,،]+/).filter(c => c.length >= 1 && c.length <= 5);
-  const added = [], unknown = [];
-
-  codes.forEach(code => {
-    const item = findItem(code);
-    if (item) { s.cart.push(item); added.push(item); }
-    else if (code.length >= 2 && !/^(I|A|THE|AND|OR|OF|IS|IN)$/.test(code)) unknown.push(code);
-  });
-
-  if (added.length > 0) {
-    const total = s.cart.reduce((sum, i) => sum + i.price, 0);
-    let reply = `✅ *Added to cart:*\n`;
-    added.forEach(i => reply += `• ${i.name} — ${R.currency}${i.price}\n`);
-    if (unknown.length) reply += `\n⚠️ Not found: ${unknown.join(', ')}\n`;
-    reply += `\n🛒 *${s.cart.length} item(s)* | Total: *${R.currency}${total}*\n\n`;
-    reply += `Type *CART* to review 📋\nType *ORDER* to checkout ✅\nType *MENU* to add more 🍽️`;
-    await sendMsg(from, reply);
-    return;
-  }
-
-  // ── DEFAULT ──
-  await sendMsg(from, `👋 I didn't understand that.\n\nType *MENU* to see our menu\nType *HELP* for all commands\n\n— *${R.name}* 🍽️`);
+  await sendMsg(from, `👋 I didn't understand that.\n\nType *MENU* for the menu · *HELP* for commands\n\n— *${R.chatBrand}*`);
 }
 
 async function processWebhookPayload(body) {
@@ -460,16 +553,16 @@ async function processWebhookPayload(body) {
     }
 
     if (msg.type === 'interactive' && msg.interactive.type === 'list_reply') {
+      const { menu: botMenu } = await getBotMenuRecord(R.menu);
       const itemId = msg.interactive.list_reply.id;
-      const item   = findItem(itemId);
+      const item = findItemInMenu(botMenu, itemId);
       if (item) {
         if (!isRestaurantOpen()) {
           await sendMsg(from, closedOrderMsg());
         } else {
           const s = session(from);
           s.cart.push(item);
-          const total = s.cart.reduce((sum, i) => sum + i.price, 0);
-          await sendMsg(from, `✅ *Added:* ${item.name} — ${R.currency}${item.price}\n\n🛒 *${s.cart.length} item(s)* | Total: *${R.currency}${total}*\n\nType *CART* to review\nType *ORDER* to checkout\nType *MENU* to add more`);
+          await sendMsg(from, formatAddedToCartReply([{ item, qty: 1 }], [], s.cart));
         }
       }
     }
@@ -506,36 +599,70 @@ app.post('/webhook', (req, res) => {
 // ─────────────────────────────────────────────
 //  ADMIN DASHBOARD
 // ─────────────────────────────────────────────
-const { renderAdminPage } = require('./lib/admin-dashboard');
 
-app.get('/', (req, res) => {
-  res.send(renderAdminPage({ R, PHONE_NUMBER_ID, orders, page: 'overview' }));
+async function renderWithOrders(page, extra = {}) {
+  const orders = await fetchOrdersForDashboard();
+  return renderAdminPage({ R, PHONE_NUMBER_ID, orders, page, ...extra });
+}
+
+app.get('/', async (req, res) => {
+  try {
+    res.send(await renderWithOrders('overview'));
+  } catch (err) {
+    console.error('GET /', err);
+    res.status(500).send('Server error');
+  }
 });
 
-app.get('/orders', (req, res) => {
-  res.send(renderAdminPage({ R, PHONE_NUMBER_ID, orders, page: 'orders' }));
+app.get('/orders', async (req, res) => {
+  try {
+    res.send(await renderWithOrders('orders'));
+  } catch (err) {
+    console.error('GET /orders', err);
+    res.status(500).send('Server error');
+  }
 });
 
-app.get('/menu', (req, res) => {
-  res.send(renderAdminPage({ R, PHONE_NUMBER_ID, orders, page: 'menu' }));
+app.get('/menu', async (req, res) => {
+  try {
+    const menuDb = await fetchMenuGroupedByCategory();
+    res.send(await renderWithOrders('menu', { menuDb }));
+  } catch (err) {
+    console.error('Menu page error:', err);
+    try {
+      const menuDb = { ok: false, error: 'exception', message: err.message || String(err) };
+      res.status(500).send(await renderWithOrders('menu', { menuDb }));
+    } catch (e2) {
+      res.status(500).send('Server error');
+    }
+  }
 });
 
-app.get('/settings', (req, res) => {
-  res.send(
-    renderAdminPage({
-      R,
-      PHONE_NUMBER_ID,
-      orders,
-      page: 'settings',
-      settingsMeta: {
-        hasAccessToken: Boolean(ACCESS_TOKEN),
-        verifyFromEnv: Boolean(process.env.VERIFY_TOKEN),
-      },
-    })
-  );
+app.get('/settings', async (req, res) => {
+  try {
+    res.send(
+      await renderWithOrders('settings', {
+        settingsMeta: {
+          hasAccessToken: Boolean(ACCESS_TOKEN),
+          verifyFromEnv: Boolean(process.env.VERIFY_TOKEN),
+        },
+      })
+    );
+  } catch (err) {
+    console.error('GET /settings', err);
+    res.status(500).send('Server error');
+  }
 });
 
-app.get('/api/orders', (req, res) => res.json(orders.slice().reverse()));
+app.get('/api/orders', async (req, res) => {
+  try {
+    const orders = await fetchOrdersForDashboard();
+    res.json(orders);
+  } catch (err) {
+    console.error('GET /api/orders', err);
+    res.status(500).json({ error: 'Failed to load orders' });
+  }
+});
 
 // ─────────────────────────────────────────────
 //  START
