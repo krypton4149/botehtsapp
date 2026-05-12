@@ -12,7 +12,7 @@ require('dotenv').config();
 const express = require('express');
 const axios   = require('axios');
 const https   = require('https');
-const fs      = require('fs');
+const path    = require('path');
 
 /** Reused TLS connections to graph.facebook.com — much faster than one cold handshake per reply. */
 const graphHttpsAgent = new https.Agent({
@@ -27,13 +27,18 @@ const graphHttp = axios.create({
 
 const app = express();
 app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+const { isRestaurantOpen } = require('./lib/restaurant-hours');
 
 // ─────────────────────────────────────────────
 //  ✏️  RESTAURANT CONFIG — EDIT THIS SECTION
 // ─────────────────────────────────────────────
 const R = {
-  name:          "MaaJaanki Restaurant",
+  name:          "Maa Jaanki Restaurant",
   tagline:       "Fresh Food, Fast Delivery",
+  /** Shown in admin sidebar; replace with your own file under /public/ if you like. */
+  logoUrl:       "/logo.svg",
   address:       "Shikohabad Rd, near Tiwariya Chauraha, Shikohabad, Uttar Pradesh 283135",
   timing:        "11:00 AM – 11:00 PM (All days)",
   currency:      "₹",
@@ -140,6 +145,15 @@ function findItem(code) {
     if (f) return f;
   }
   return null;
+}
+
+function closedOrderMsg() {
+  return (
+    `🕚 *${R.name}* is closed right now.\n\n` +
+    `We take orders *11 AM – 11 PM* (India time).\n` +
+    `Please message again after we open — we’d love to serve you! 🙏\n\n` +
+    `_Type *TRACK* for a past order._`
+  );
 }
 
 // ─────────────────────────────────────────────
@@ -287,6 +301,11 @@ async function handleMsg(from, text) {
 
   // ── AWAITING NAME + PHONE + ADDRESS (one reply) ──
   if (s.state === 'awaiting_checkout_details') {
+    if (!isRestaurantOpen()) {
+      await sendMsg(from, closedOrderMsg());
+      resetSession(from);
+      return;
+    }
     const parsed = parseCheckoutDetails(text);
     if (!parsed || parsed.address.length < 5) {
       await sendMsg(
@@ -321,6 +340,30 @@ async function handleMsg(from, text) {
 
     resetSession(from);
     await sendMsg(from, confirmMsg(order));
+    return;
+  }
+
+  // ── TRACK / HELP (always, even when closed) ──
+  if (upper === 'TRACK' || upper === 'TRACK ORDER') {
+    const myOrders = orders.filter(o => o.whatsapp === from);
+    if (!myOrders.length) {
+      await sendMsg(from, `📦 No orders found for your number.\n\nType *MENU* to place your first order!`);
+      return;
+    }
+    const last = myOrders[myOrders.length - 1];
+    await sendMsg(from, `📦 *Order #${last.num} Status*\n━━━━━━━━━━━━━━━━\n✅ Status: *${last.status}*\n🕐 Placed: ${last.time}\n💰 Total: ${R.currency}${last.total}\n📍 Delivery to: ${last.address}\n\n⏱️ Estimated: ${R.delivery_time}\n\nThank you for your patience! 🙏`);
+    return;
+  }
+
+  if (upper === 'HELP' || upper === '?') {
+    await sendMsg(from, `🤖 *${R.name} Bot Help*\n\n*Commands:*\n• *MENU* — View full menu\n• *P1 B2 D1* — Add items to cart\n• *CART* — View cart & total\n• *ORDER* — Place your order\n• *REMOVE* — Remove last item\n• *CLEAR* — Empty cart\n• *TRACK* — Track your order\n• *HELP* — Show this help\n\n📍 ${R.address}\n🕐 ${R.timing}`);
+    return;
+  }
+
+  const open = isRestaurantOpen();
+  const whenClosedAllow = new Set(['CART', 'CLEAR', 'CANCEL', 'REMOVE', 'UNDO']);
+  if (!open && !whenClosedAllow.has(upper)) {
+    await sendMsg(from, closedOrderMsg());
     return;
   }
 
@@ -377,27 +420,6 @@ async function handleMsg(from, text) {
     return;
   }
 
-  // ── TRACK ORDER ──
-  if (upper === 'TRACK' || upper === 'TRACK ORDER') {
-    const myOrders = orders.filter(o => o.whatsapp === from);
-    if (!myOrders.length) {
-      await sendMsg(from, `📦 No orders found for your number.\n\nType *MENU* to place your first order!`);
-      return;
-    }
-    const last = myOrders[myOrders.length - 1];
-    await sendMsg(from, `📦 *Order #${last.num} Status*\n━━━━━━━━━━━━━━━━\n✅ Status: *${last.status}*\n🕐 Placed: ${last.time}\n💰 Total: ${R.currency}${last.total}\n📍 Delivery to: ${last.address}\n\n⏱️ Estimated: ${R.delivery_time}\n\nThank you for your patience! 🙏`);
-    return;
-  }
-
-  // ── HELP ──
-  if (upper === 'HELP' || upper === '?') {
-    await sendMsg(from, `🤖 *${R.name} Bot Help*\n\n*Commands:*\n• *MENU* — View full menu\n• *P1 B2 D1* — Add items to cart\n• *CART* — View cart & total\n• *ORDER* — Place your order\n• *REMOVE* — Remove last item\n• *CLEAR* — Empty cart\n• *TRACK* — Track your order\n• *HELP* — Show this help\n\n📍 ${R.address}\n🕐 ${R.timing}`);
-    return;
-  }
-
-  // ── INTERACTIVE LIST REPLY (when customer taps a menu item) ──
-  // Handled below in webhook section
-
   // ── PARSE ITEM CODES (e.g. "P1 B2 D1") ──
   const codes = upper.split(/[\s,،]+/).filter(c => c.length >= 1 && c.length <= 5);
   const added = [], unknown = [];
@@ -441,10 +463,14 @@ async function processWebhookPayload(body) {
       const itemId = msg.interactive.list_reply.id;
       const item   = findItem(itemId);
       if (item) {
-        const s = session(from);
-        s.cart.push(item);
-        const total = s.cart.reduce((sum, i) => sum + i.price, 0);
-        await sendMsg(from, `✅ *Added:* ${item.name} — ${R.currency}${item.price}\n\n🛒 *${s.cart.length} item(s)* | Total: *${R.currency}${total}*\n\nType *CART* to review\nType *ORDER* to checkout\nType *MENU* to add more`);
+        if (!isRestaurantOpen()) {
+          await sendMsg(from, closedOrderMsg());
+        } else {
+          const s = session(from);
+          s.cart.push(item);
+          const total = s.cart.reduce((sum, i) => sum + i.price, 0);
+          await sendMsg(from, `✅ *Added:* ${item.name} — ${R.currency}${item.price}\n\n🛒 *${s.cart.length} item(s)* | Total: *${R.currency}${total}*\n\nType *CART* to review\nType *ORDER* to checkout\nType *MENU* to add more`);
+        }
       }
     }
   }
