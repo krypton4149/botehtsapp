@@ -34,6 +34,7 @@ const {
   fetchOrdersForDashboard,
   insertOrderFromCheckout,
   fetchOrdersByWhatsapp,
+  setOrderOutForDelivery,
 } = require('./lib/supabase-orders');
 const { renderAdminPage } = require('./lib/admin-dashboard');
 const { fetchMenuGroupedByCategory, getBotMenuRecord } = require('./lib/supabase-menu');
@@ -672,6 +673,31 @@ app.get('/api/orders', async (req, res) => {
   } catch (err) {
     console.error('GET /api/orders', err);
     res.status(500).json({ error: 'Failed to load orders' });
+  }
+});
+
+/** Mark order prepared & out for delivery (admin dashboard toggle). */
+app.patch('/api/orders/:orderNum/dispatch', async (req, res) => {
+  try {
+    const orderNum = parseInt(req.params.orderNum, 10);
+    if (!Number.isFinite(orderNum) || orderNum < 1) {
+      res.status(400).json({ error: 'Invalid order number' });
+      return;
+    }
+    const raw = req.body?.out ?? req.body?.out_for_delivery;
+    if (typeof raw !== 'boolean') {
+      res.status(400).json({ error: 'JSON body must include out: true|false' });
+      return;
+    }
+    const result = await setOrderOutForDelivery(orderNum, raw);
+    if (!result.ok) {
+      res.status(result.code || 500).json({ error: result.message || 'Update failed' });
+      return;
+    }
+    res.json({ ok: true, order_num: orderNum, out_for_delivery: raw });
+  } catch (err) {
+    console.error('PATCH /api/orders/:orderNum/dispatch', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
