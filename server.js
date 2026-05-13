@@ -32,6 +32,21 @@ const {
 const { renderAdminPage } = require('./lib/admin-dashboard');
 const { fetchMenuGroupedByCategory, getBotMenuRecord } = require('./lib/supabase-menu');
 const { menuCategoryEmoji } = require('./lib/menu-presentation');
+const { MENU } = require('./scripts/menu-seed-data');
+
+/** Same shape as DB menu: category title → rows { id, name, price, veg }. Source: scripts/menu-seed-data.js */
+function buildEmbeddedMenuRecord() {
+  const menu = {};
+  for (const cat of MENU) {
+    menu[cat.title] = cat.items.map((it) => ({
+      id: it.id,
+      name: it.name,
+      price: Number(it.price),
+      veg: true,
+    }));
+  }
+  return menu;
+}
 
 // ─────────────────────────────────────────────
 //  ✏️  RESTAURANT CONFIG — EDIT THIS SECTION
@@ -53,8 +68,8 @@ const R = {
   payment:       "Cash on Delivery / UPI on Delivery",
   min_order:     199,
 
-  /** Fallback when Supabase has no menu rows; bot uses DB when available (see getBotMenuRecord). */
-  menu: {}
+  /** Bot menu: built from scripts/menu-seed-data.js; getBotMenuRecord prefers this when non-empty. */
+  menu: buildEmbeddedMenuRecord(),
 };
 
 // ─────────────────────────────────────────────
@@ -711,7 +726,7 @@ async function processWebhookPayload(body) {
   const entries = body?.entry;
   if (!Array.isArray(entries) || !entries.length) {
     if (body && Object.keys(body).length) {
-      console.log('📨 Webhook: no messages entry (often status-only or test ping)');
+      console.log('📨 Webhook: no entry[] (status ping or non-message payload)');
     }
     return;
   }
@@ -721,15 +736,20 @@ async function processWebhookPayload(body) {
     if (!Array.isArray(changes)) continue;
 
     for (const change of changes) {
-      if (change.field && change.field !== 'messages') continue;
+      const field = String(change.field || '').toLowerCase();
+      if (field && field !== 'messages') continue;
 
       const value = change?.value;
       if (!value) continue;
 
+      if (Array.isArray(value.errors) && value.errors.length) {
+        console.error('📨 Webhook value.errors:', JSON.stringify(value.errors).slice(0, 500));
+      }
+
       const metaPid = value.metadata?.phone_number_id;
       if (metaPid && PHONE_NUMBER_ID && String(metaPid) !== String(PHONE_NUMBER_ID)) {
         console.warn(
-          '⚠️ Webhook phone_number_id mismatch — incoming events are for a different number than PHONE_NUMBER_ID in .env. got=',
+          '⚠️ Webhook phone_number_id mismatch — fix PHONE_NUMBER_ID in .env. got=',
           metaPid,
           'expected=',
           PHONE_NUMBER_ID
@@ -742,7 +762,14 @@ async function processWebhookPayload(body) {
       console.log(`📨 Webhook: ${messages.length} incoming message(s) · phone_number_id=${metaPid || '?'}`);
 
       for (const msg of messages) {
-        const from = msg.from;
+        const from =
+          msg.from ||
+          (Array.isArray(value.contacts) && value.contacts.find((c) => c.wa_id)?.wa_id) ||
+          null;
+        if (!from) {
+          console.warn('📨 Webhook: message without msg.from or contacts[].wa_id — skipped', msg.type);
+          continue;
+        }
 
         const runHandle = async (textBody) => {
           try {
@@ -758,6 +785,11 @@ async function processWebhookPayload(body) {
 
         if (msg.type === 'text' && msg.text?.body != null) {
           await runHandle(String(msg.text.body));
+        } else if (msg.type === 'unsupported') {
+          await sendMsg(
+            from,
+            '⚠️ This message type is not supported on our bot yet. Please send plain *text* (e.g. *hi* or *menu*).'
+          );
         } else if (msg.type === 'interactive' && msg.interactive?.type === 'list_reply') {
           const botMenu = await fetchBotMenuOrFallback(R.menu);
           const itemId = msg.interactive.list_reply.id;
@@ -776,7 +808,7 @@ async function processWebhookPayload(body) {
           const t = br && (br.title || br.id);
           if (t) await runHandle(String(t));
         } else {
-          console.log('📨 Webhook: skipped non-text message type:', msg.type);
+          console.log('📨 Webhook: skipped message type:', msg.type);
         }
       }
     }
