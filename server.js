@@ -39,6 +39,7 @@ const {
 } = require('./lib/supabase-orders');
 const { renderAdminPage } = require('./lib/admin-dashboard');
 const { fetchMenuGroupedByCategory, getBotMenuRecord } = require('./lib/supabase-menu');
+const { menuCategoryEmoji } = require('./lib/menu-presentation');
 
 // ─────────────────────────────────────────────
 //  ✏️  RESTAURANT CONFIG — EDIT THIS SECTION
@@ -213,25 +214,33 @@ function closedOrderMsg() {
 function menuLineShortName(name) {
   let n = String(name).trim();
   n = n.replace(/\s+Pizza$/i, '').replace(/\s+Burger$/i, '').replace(/\s+Pasta$/i, '');
-  if (n.length > 28) n = `${n.slice(0, 26)}…`;
+  if (n.length > 36) n = `${n.slice(0, 34)}…`;
   return n;
 }
 
 /** Full text menu (one string). Items are one per line so we can split under WhatsApp’s 4096-char limit. */
 function buildFullMenuText(menuRecord) {
-  let m = '🍽️ *MaaJaanki Menu*\n\n';
+  const brand = R.chatBrand || R.name || 'Our restaurant';
+  const subline = `_${R.hoursShort} · Min ${R.currency}${R.min_order} · ${R.areaShort}_`;
+  const rule = '· · · · · · · · · · · · · ·';
+  let m = `🍴 *${brand}*\n_Your menu · order with codes below_\n${subline}\n${rule}\n\n`;
   const entries = Object.entries(menuRecord).filter(([, items]) => items && items.length);
   if (!entries.length) {
     return `${m}_Menu is updating — please try again in a moment._`;
   }
   for (const [cat, items] of entries) {
-    m += `*${cat}*\n`;
+    const icon = menuCategoryEmoji(cat);
+    m += `${icon} *${cat}*\n`;
     for (const i of items) {
-      m += `${String(i.id).toUpperCase()} ${menuLineShortName(i.name)} ${R.currency}${i.price}\n`;
+      const code = String(i.id).toUpperCase();
+      const nm = menuLineShortName(i.name);
+      m += `   ▫️ *${code}* — ${nm} — *${R.currency}${i.price}*\n`;
     }
     m += '\n';
   }
-  m += '👉 *TL1 MO1 BD1* · *MO1x2* = two of the same item';
+  m += `${rule}\n`;
+  m += '👉 *TL1 MO1 BD1* · *MO1x2* = two of the same item\n';
+  m += `_${R.tagline}_`;
   return m;
 }
 
@@ -248,7 +257,7 @@ function chunkWhatsAppBody(text, maxLen = WA_MENU_CHUNK_SAFE) {
   if (text.length <= maxLen) return [text];
   const chunks = [];
   let rest = text.trimEnd();
-  const cont = '📄 *Menu (continued)*\n\n';
+  const cont = '✨ _Menu continues…_\n\n';
   let first = true;
   while (rest.length) {
     const overhead = first ? 0 : cont.length;
