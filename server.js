@@ -61,45 +61,7 @@ const R = {
   min_order:     199,
 
   /** Fallback when Supabase has no menu rows; bot uses DB when available (see getBotMenuRecord). */
-  menu: {
-    "🍕 Pizza": [
-      { id:"P1",  name:"Margherita Pizza",      price:249, veg:true  },
-      { id:"P2",  name:"Pepperoni Pizza",        price:349, veg:false },
-      { id:"P3",  name:"Paneer Tikka Pizza",     price:319, veg:true  },
-      { id:"P4",  name:"BBQ Chicken Pizza",      price:379, veg:false },
-    ],
-    "🍔 Burgers": [
-      { id:"B1",  name:"Classic Veg Burger",     price:149, veg:true  },
-      { id:"B2",  name:"Crispy Chicken Burger",  price:199, veg:false },
-      { id:"B3",  name:"Double Smash Burger",    price:279, veg:false },
-      { id:"B4",  name:"Paneer Zinger Burger",   price:219, veg:true  },
-    ],
-    "🍛 Indian": [
-      { id:"I1",  name:"Butter Chicken + Naan",  price:320, veg:false },
-      { id:"I2",  name:"Paneer Butter Masala",   price:280, veg:true  },
-      { id:"I3",  name:"Chicken Biryani",        price:299, veg:false },
-      { id:"I4",  name:"Veg Biryani",            price:229, veg:true  },
-      { id:"I5",  name:"Dal Makhani + Rice",     price:199, veg:true  },
-    ],
-    "🍝 Pasta": [
-      { id:"PA1", name:"Arrabiata Pasta",        price:199, veg:true  },
-      { id:"PA2", name:"Chicken Alfredo",        price:269, veg:false },
-    ],
-    "🍟 Sides": [
-      { id:"S1",  name:"Loaded Fries",           price:129, veg:true  },
-      { id:"S2",  name:"Chicken Wings (6 pcs)",  price:249, veg:false },
-      { id:"S3",  name:"Garlic Bread",           price:89,  veg:true  },
-    ],
-    "🥤 Drinks": [
-      { id:"D1",  name:"Mango Lassi",            price:99,  veg:true  },
-      { id:"D2",  name:"Cold Coffee",            price:119, veg:true  },
-      { id:"D3",  name:"Fresh Lime Soda",        price:79,  veg:true  },
-    ],
-    "🍮 Desserts": [
-      { id:"DS1", name:"Gulab Jamun (2 pcs)",    price:89,  veg:true  },
-      { id:"DS2", name:"Chocolate Brownie",      price:129, veg:true  },
-    ],
-  }
+  menu: {}
 };
 
 // ─────────────────────────────────────────────
@@ -265,13 +227,11 @@ function compactMenuMsg(menuRecord) {
   for (const [cat, items] of entries) {
     m += `*${cat}*\n`;
     const parts = items.map(
-      (i) =>
-        `${String(i.id).toUpperCase()} ${menuLineShortName(i.name)} ${R.currency}${i.price} ${i.veg ? '🟢' : '🔴'}`
+      (i) => `${String(i.id).toUpperCase()} ${menuLineShortName(i.name)} ${R.currency}${i.price}`
     );
     m += `${parts.join(' | ')}\n\n`;
   }
-  m += '🟢 Veg   🔴 Non-veg\n\n';
-  m += '👉 *B1 I4 D1* · *B1x2* = two of the same item';
+  m += '👉 *TL1 MO1 BD1* · *MO1x2* = two of the same item';
   return m;
 }
 
@@ -297,7 +257,7 @@ function cartBodyFromCart(cart) {
 
 function cartMsg(cart) {
   if (!cart.length) {
-    return `📋 Cart empty — *B1 I4* · *B1x2* · *MENU*${cartCommandBar()}`;
+    return `📋 Cart empty — *TL1 MO1* · *MO1x2* · *MENU*${cartCommandBar()}`;
   }
   const { lines, total } = cartBodyFromCart(cart);
   let m = '📋 *Your cart:*\n';
@@ -548,7 +508,7 @@ async function handleMsg(from, text) {
   // ── ORDER ──
   if (upper === 'ORDER' || upper === 'CHECKOUT' || upper === 'PLACE ORDER') {
     if (!s.cart.length) {
-      await sendMsg(from, `🛒 Cart empty — *B1 I4* or *B1x2*, or *MENU*.${cartCommandBar()}`);
+      await sendMsg(from, `🛒 Cart empty — *TL1 MO1* or *MO1x2*, or *MENU*.${cartCommandBar()}`);
       return;
     }
     const total = s.cart.reduce((sum, i) => sum + i.price, 0);
@@ -589,7 +549,7 @@ async function handleMsg(from, text) {
   if (unknown.length > 0) {
     await sendMsg(
       from,
-      `⚠️ Not found: ${unknown.join(', ')}\n\nTry *MENU* or codes like *B1 I4 D1*.${cartCommandBar()}`
+      `⚠️ Not found: ${unknown.join(', ')}\n\nTry *MENU* or codes like *TL1 MO1 BD1*.${cartCommandBar()}`
     );
     return;
   }

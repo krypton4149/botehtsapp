@@ -1,54 +1,288 @@
--- Seed menu to match server.js defaults (idempotent inserts)
--- Run AFTER migrations/20250512120000_restaurant_menu_and_orders.sql
+-- Allow backend (same anon JWT as orders) to manage menu for seeds / scripts.
+-- Publishable key in server .env is not exposed to browsers in this app.
+
+DROP POLICY IF EXISTS "menu_categories_backend_insert" ON public.menu_categories;
+CREATE POLICY "menu_categories_backend_insert"
+  ON public.menu_categories FOR INSERT
+  TO anon, authenticated
+  WITH CHECK (true);
+
+DROP POLICY IF EXISTS "menu_categories_backend_update" ON public.menu_categories;
+CREATE POLICY "menu_categories_backend_update"
+  ON public.menu_categories FOR UPDATE
+  TO anon, authenticated
+  USING (true)
+  WITH CHECK (true);
+
+DROP POLICY IF EXISTS "menu_categories_backend_delete" ON public.menu_categories;
+CREATE POLICY "menu_categories_backend_delete"
+  ON public.menu_categories FOR DELETE
+  TO anon, authenticated
+  USING (true);
+
+DROP POLICY IF EXISTS "menu_items_backend_insert" ON public.menu_items;
+CREATE POLICY "menu_items_backend_insert"
+  ON public.menu_items FOR INSERT
+  TO anon, authenticated
+  WITH CHECK (true);
+
+DROP POLICY IF EXISTS "menu_items_backend_update" ON public.menu_items;
+CREATE POLICY "menu_items_backend_update"
+  ON public.menu_items FOR UPDATE
+  TO anon, authenticated
+  USING (true)
+  WITH CHECK (true);
+
+DROP POLICY IF EXISTS "menu_items_backend_delete" ON public.menu_items;
+CREATE POLICY "menu_items_backend_delete"
+  ON public.menu_items FOR DELETE
+  TO anon, authenticated
+  USING (true);
+
+-- Jaanki full menu (all veg). Idempotent: safe to re-run.
+-- Generated from scripts/menu-seed-data.js
 
 INSERT INTO public.menu_categories (title, sort_order) VALUES
-  ('🍕 Pizza', 0),
-  ('🍔 Burgers', 1),
-  ('🍛 Indian', 2),
-  ('🍝 Pasta', 3),
-  ('🍟 Sides', 4),
-  ('🥤 Drinks', 5),
-  ('🍮 Desserts', 6)
+  ('Thalis', 0),
+  ('Momos Point', 1),
+  ('Bread Basket', 2),
+  ('Rice', 3),
+  ('Snacks', 4),
+  ('Indian Main Course', 5),
+  ('Salads & Raita', 6),
+  ('South Indian Delicacies', 7),
+  ('Chinese', 8),
+  ('Noodles & Rice', 9),
+  ('Tandoori', 10),
+  ('Chinese Maincourse', 11),
+  ('Pasta / Pizza House', 12),
+  ('Soups & Shorbas', 13)
 ON CONFLICT (title) DO UPDATE SET sort_order = EXCLUDED.sort_order;
 
 INSERT INTO public.menu_items (id, category_id, name, price, veg, sort_order)
-SELECT v.id, mc.id, v.name, v.price, v.veg, v.sort_order
+SELECT v.id, mc.id, v.name, v.price, true, v.sort_order
 FROM (VALUES
-  -- Pizza
-  ('P1',  '🍕 Pizza', 'Margherita Pizza',      249::numeric, true,  0),
-  ('P2',  '🍕 Pizza', 'Pepperoni Pizza',       349::numeric, false, 1),
-  ('P3',  '🍕 Pizza', 'Paneer Tikka Pizza',    319::numeric, true,  2),
-  ('P4',  '🍕 Pizza', 'BBQ Chicken Pizza',     379::numeric, false, 3),
-  -- Burgers
-  ('B1',  '🍔 Burgers', 'Classic Veg Burger',     149::numeric, true,  0),
-  ('B2',  '🍔 Burgers', 'Crispy Chicken Burger',  199::numeric, false, 1),
-  ('B3',  '🍔 Burgers', 'Double Smash Burger',    279::numeric, false, 2),
-  ('B4',  '🍔 Burgers', 'Paneer Zinger Burger',   219::numeric, true,  3),
-  -- Indian
-  ('I1',  '🍛 Indian', 'Butter Chicken + Naan', 320::numeric, false, 0),
-  ('I2',  '🍛 Indian', 'Paneer Butter Masala',  280::numeric, true,  1),
-  ('I3',  '🍛 Indian', 'Chicken Biryani',       299::numeric, false, 2),
-  ('I4',  '🍛 Indian', 'Veg Biryani',           229::numeric, true,  3),
-  ('I5',  '🍛 Indian', 'Dal Makhani + Rice',    199::numeric, true,  4),
-  -- Pasta
-  ('PA1', '🍝 Pasta', 'Arrabiata Pasta',       199::numeric, true,  0),
-  ('PA2', '🍝 Pasta', 'Chicken Alfredo',       269::numeric, false, 1),
-  -- Sides
-  ('S1',  '🍟 Sides', 'Loaded Fries',          129::numeric, true,  0),
-  ('S2',  '🍟 Sides', 'Chicken Wings (6 pcs)', 249::numeric, false, 1),
-  ('S3',  '🍟 Sides', 'Garlic Bread',           89::numeric, true,  2),
-  -- Drinks
-  ('D1',  '🥤 Drinks', 'Mango Lassi',          99::numeric, true, 0),
-  ('D2',  '🥤 Drinks', 'Cold Coffee',         119::numeric, true, 1),
-  ('D3',  '🥤 Drinks', 'Fresh Lime Soda',      79::numeric, true, 2),
-  -- Desserts
-  ('DS1', '🍮 Desserts', 'Gulab Jamun (2 pcs)',    89::numeric, true, 0),
-  ('DS2', '🍮 Desserts', 'Chocolate Brownie',     129::numeric, true, 1)
-) AS v(id, cat_title, name, price, veg, sort_order)
+  ('TL1', 'Thalis', 'JAANKI SPECIAL THALI', 560::numeric, 0),
+  ('TL2', 'Thalis', 'DELUXE THALI', 360::numeric, 1),
+  ('MO1', 'Momos Point', 'Steamed Veg Momos', 265::numeric, 0),
+  ('MO2', 'Momos Point', 'Fried Veg Momos', 275::numeric, 1),
+  ('MO3', 'Momos Point', 'Rich Dark Chocolate Ice Cream', 295::numeric, 2),
+  ('MO4', 'Momos Point', 'Steamed Paneer Momos', 310::numeric, 3),
+  ('MO5', 'Momos Point', 'Fried Paneer Momos', 320::numeric, 4),
+  ('MO6', 'Momos Point', 'Paneer Kurkure Momos', 330::numeric, 5),
+  ('MO7', 'Momos Point', 'Veg Chilli Momos', 290::numeric, 6),
+  ('MO8', 'Momos Point', 'Paneer Chilli Momos', 299::numeric, 7),
+  ('MO9', 'Momos Point', 'Tandoori Malai Momos', 375::numeric, 8),
+  ('BD1', 'Bread Basket', 'Plain Roti', 25::numeric, 0),
+  ('BD2', 'Bread Basket', 'Butter Roti', 30::numeric, 1),
+  ('BD3', 'Bread Basket', 'Lacchha Paratha', 65::numeric, 2),
+  ('BD4', 'Bread Basket', 'Missi Roti', 65::numeric, 3),
+  ('BD5', 'Bread Basket', 'Missi Masala Roti', 75::numeric, 4),
+  ('BD6', 'Bread Basket', 'Plain Naan', 65::numeric, 5),
+  ('BD7', 'Bread Basket', 'Butter Naan', 85::numeric, 6),
+  ('BD8', 'Bread Basket', 'Garlic Naan', 95::numeric, 7),
+  ('BD9', 'Bread Basket', 'Cheese Garlic Naan', 115::numeric, 8),
+  ('BD10', 'Bread Basket', 'Stuffed Naan', 115::numeric, 9),
+  ('BD11', 'Bread Basket', 'Paneer Stuffed Naan', 149::numeric, 10),
+  ('BD12', 'Bread Basket', 'Kabuli Naan', 135::numeric, 11),
+  ('BD13', 'Bread Basket', 'Stuffed Kulcha', 125::numeric, 12),
+  ('BD14', 'Bread Basket', 'Paneer Kulcha', 145::numeric, 13),
+  ('BD15', 'Bread Basket', 'Kashmiri Naan', 145::numeric, 14),
+  ('BD16', 'Bread Basket', 'Soya Keema Naan (Spicy)', 165::numeric, 15),
+  ('BD17', 'Bread Basket', 'Mughlai Khamiri Roti', 135::numeric, 16),
+  ('BD18', 'Bread Basket', 'Green Chilli Lacchha Paratha', 65::numeric, 17),
+  ('RC1', 'Rice', 'Steamed Rice', 210::numeric, 0),
+  ('RC2', 'Rice', 'Jeera Rice', 225::numeric, 1),
+  ('RC3', 'Rice', 'Veg Pulav', 245::numeric, 2),
+  ('RC4', 'Rice', 'Matar Pulav', 290::numeric, 3),
+  ('RC5', 'Rice', 'Paneer Palav', 295::numeric, 4),
+  ('RC6', 'Rice', 'Kashmiri Pulav', 320::numeric, 5),
+  ('RC7', 'Rice', 'Veg Biryani', 340::numeric, 6),
+  ('RC8', 'Rice', 'Veg Hyderabadi Biryani', 365::numeric, 7),
+  ('SK1', 'Snacks', 'Veg Pakoda (Assorted)', 175::numeric, 0),
+  ('SK2', 'Snacks', 'Paneer Pakoda', 240::numeric, 1),
+  ('SK3', 'Snacks', 'Cheese Balls', 280::numeric, 2),
+  ('SK4', 'Snacks', 'Veg Cutlet', 180::numeric, 3),
+  ('SK5', 'Snacks', 'Paneer Cutlet', 280::numeric, 4),
+  ('SK6', 'Snacks', 'Corn Cutlet', 280::numeric, 5),
+  ('SK7', 'Snacks', 'Paneer Rolls', 280::numeric, 6),
+  ('SK8', 'Snacks', 'Veg Spring Rolls', 280::numeric, 7),
+  ('SK9', 'Snacks', 'French Fries', 180::numeric, 8),
+  ('SK10', 'Snacks', 'Peri-Peri Masala Fries', 190::numeric, 9),
+  ('SK11', 'Snacks', 'Baked Cheesy Fries', 299::numeric, 10),
+  ('SK12', 'Snacks', 'Cigar Rolls', 260::numeric, 11),
+  ('SK13', 'Snacks', 'Mushroom Duplex', 300::numeric, 12),
+  ('SK14', 'Snacks', 'Chilli Honey Potato', 260::numeric, 13),
+  ('SK15', 'Snacks', 'Chilli Potato', 250::numeric, 14),
+  ('SK16', 'Snacks', 'Fry Kaju Masala', 399::numeric, 15),
+  ('SK17', 'Snacks', 'Masala Papad', 120::numeric, 16),
+  ('SK18', 'Snacks', 'Cheese Chilly Toast', 220::numeric, 17),
+  ('SK19', 'Snacks', 'Garlic Bread', 170::numeric, 18),
+  ('SK20', 'Snacks', 'Cheese Garlic Bread', 240::numeric, 19),
+  ('SK21', 'Snacks', 'Bombay Paav Bhaji (Extra Paav-60/-)', 190::numeric, 20),
+  ('SK22', 'Snacks', 'Panjabi Choley Bhature (Extra Choley-120/-)', 0::numeric, 21),
+  ('IM1', 'Indian Main Course', 'Dal Tadka', 295::numeric, 0),
+  ('IM2', 'Indian Main Course', 'Dal Fry', 280::numeric, 1),
+  ('IM3', 'Indian Main Course', 'Dal Panchratan', 335::numeric, 2),
+  ('IM4', 'Indian Main Course', 'Dal Makhani', 335::numeric, 3),
+  ('IM5', 'Indian Main Course', 'Aloo Jeera', 195::numeric, 4),
+  ('IM6', 'Indian Main Course', 'Aloo Achari', 215::numeric, 5),
+  ('IM7', 'Indian Main Course', 'Stuffed Shimla Mirch', 260::numeric, 6),
+  ('IM8', 'Indian Main Course', 'Stuffed Tomato', 260::numeric, 7),
+  ('IM9', 'Indian Main Course', 'Aloo Gobhi Matar (Dry)', 190::numeric, 8),
+  ('IM10', 'Indian Main Course', 'Mix Veg Dry', 325::numeric, 9),
+  ('IM11', 'Indian Main Course', 'Veg Jalfrezi', 325::numeric, 10),
+  ('IM12', 'Indian Main Course', 'Veg Jaipuri', 325::numeric, 11),
+  ('IM13', 'Indian Main Course', 'Veg Kofta', 375::numeric, 12),
+  ('IM14', 'Indian Main Course', 'Malai Kofta', 425::numeric, 13),
+  ('IM15', 'Indian Main Course', 'Shaam Savera Kofta', 410::numeric, 14),
+  ('IM16', 'Indian Main Course', 'Kashmiri Dum Aloo', 435::numeric, 15),
+  ('IM17', 'Indian Main Course', 'Punjabi Dum Aloo', 435::numeric, 16),
+  ('IM18', 'Indian Main Course', 'Mushroom Masala', 430::numeric, 17),
+  ('IM19', 'Indian Main Course', 'Mushroom Tikka Masala', 445::numeric, 18),
+  ('IM20', 'Indian Main Course', 'Kadhai Mushroom', 445::numeric, 19),
+  ('IM21', 'Indian Main Course', 'Mushroom Afghani Gravy', 295::numeric, 20),
+  ('IM22', 'Indian Main Course', 'Paneer Do Pyaza', 425::numeric, 21),
+  ('IM23', 'Indian Main Course', 'Kadhai Paneer', 425::numeric, 22),
+  ('IM24', 'Indian Main Course', 'Paneer Butter Masala', 425::numeric, 23),
+  ('IM25', 'Indian Main Course', 'Paneer Lababdar', 425::numeric, 24),
+  ('IM26', 'Indian Main Course', 'Palak Paneer', 425::numeric, 25),
+  ('IM27', 'Indian Main Course', 'Lahsuni Corn Palak', 415::numeric, 26),
+  ('IM28', 'Indian Main Course', 'Matar Paneer', 425::numeric, 27),
+  ('IM29', 'Indian Main Course', 'Paneer Tikka Masala', 485::numeric, 28),
+  ('IM30', 'Indian Main Course', 'Paneer Rogan Josh', 510::numeric, 29),
+  ('IM31', 'Indian Main Course', 'Shahi Paneer (White Gravy)', 430::numeric, 30),
+  ('IM32', 'Indian Main Course', 'Paneer Pasanda', 445::numeric, 31),
+  ('IM33', 'Indian Main Course', 'Paneer Peshawari', 425::numeric, 32),
+  ('IM34', 'Indian Main Course', 'Paneer Bhurji', 485::numeric, 33),
+  ('IM35', 'Indian Main Course', 'Paneer Kolhapuri', 425::numeric, 34),
+  ('IM36', 'Indian Main Course', 'Paneer Angara', 510::numeric, 35),
+  ('IM37', 'Indian Main Course', 'Handi Paneer Jaanki Special', 555::numeric, 36),
+  ('IM38', 'Indian Main Course', 'Soya Chaap Tikka Masala', 345::numeric, 37),
+  ('IM39', 'Indian Main Course', 'Kadhai Soya Chaap', 345::numeric, 38),
+  ('IM40', 'Indian Main Course', 'Soya Keema Masala Spicy', 360::numeric, 39),
+  ('IM41', 'Indian Main Course', 'Soya Chaap Rogan Josh', 455::numeric, 40),
+  ('IM42', 'Indian Main Course', 'Navratan Korma', 455::numeric, 41),
+  ('IM43', 'Indian Main Course', 'Navratan Kofta', 455::numeric, 42),
+  ('IM44', 'Indian Main Course', 'Kaju Masala Curry', 499::numeric, 43),
+  ('IM45', 'Indian Main Course', 'Methi Matar Malai', 395::numeric, 44),
+  ('IM46', 'Indian Main Course', 'Paneer Rajwadi', 435::numeric, 45),
+  ('IM47', 'Indian Main Course', 'Chana Masala', 340::numeric, 46),
+  ('IM48', 'Indian Main Course', 'Rajma Masala', 340::numeric, 47),
+  ('SR1', 'Salads & Raita', 'Green Garden Salad', 140::numeric, 0),
+  ('SR2', 'Salads & Raita', 'Chinese Kimchi Salad', 165::numeric, 1),
+  ('SR3', 'Salads & Raita', 'Russian Salad', 175::numeric, 2),
+  ('SR4', 'Salads & Raita', 'Spicy Tossed Salad', 165::numeric, 3),
+  ('SR5', 'Salads & Raita', 'Mixed Fruit Salad', 280::numeric, 4),
+  ('SR6', 'Salads & Raita', 'Kachumber Salad', 149::numeric, 5),
+  ('SR7', 'Salads & Raita', 'Jaanki Special Salad', 180::numeric, 6),
+  ('SR8', 'Salads & Raita', 'Plain Raita', 160::numeric, 7),
+  ('SR9', 'Salads & Raita', 'Vegetable Mix Raita', 215::numeric, 8),
+  ('SR10', 'Salads & Raita', 'Aloo Pyaaz Raita', 210::numeric, 9),
+  ('SR11', 'Salads & Raita', 'Boondi Raita', 245::numeric, 10),
+  ('SR12', 'Salads & Raita', 'Mix Fruit Raita', 280::numeric, 11),
+  ('SR13', 'Salads & Raita', 'Pineapple Raita', 280::numeric, 12),
+  ('SR14', 'Salads & Raita', 'Jaanki Special Garlic Tadka Raita', 299::numeric, 13),
+  ('SI1', 'South Indian Delicacies', 'Plain Butter Dosa', 130::numeric, 0),
+  ('SI2', 'South Indian Delicacies', 'Plain Paper Dosa', 145::numeric, 1),
+  ('SI3', 'South Indian Delicacies', 'Chocolate Paper Dosa', 149::numeric, 2),
+  ('SI4', 'South Indian Delicacies', 'Schezwan Paper Dosa', 149::numeric, 3),
+  ('SI5', 'South Indian Delicacies', 'Masala Dosa', 180::numeric, 4),
+  ('SI6', 'South Indian Delicacies', 'Paneer Masala Dosa', 260::numeric, 5),
+  ('SI7', 'South Indian Delicacies', 'Cheese Masala Dosa', 260::numeric, 6),
+  ('SI8', 'South Indian Delicacies', 'Mysore Masala Dosa', 255::numeric, 7),
+  ('SI9', 'South Indian Delicacies', 'Hungama Mysore Dosa', 310::numeric, 8),
+  ('SI10', 'South Indian Delicacies', 'Ghotala Mysore Dosa', 299::numeric, 9),
+  ('SI11', 'South Indian Delicacies', 'Jaanki Special Matki Dosa', 360::numeric, 10),
+  ('SI12', 'South Indian Delicacies', 'Jini Roll Dosa', 299::numeric, 11),
+  ('SI13', 'South Indian Delicacies', 'Spring Roll Dosa', 299::numeric, 12),
+  ('SI14', 'South Indian Delicacies', 'Cheese Chilli Dosa', 250::numeric, 13),
+  ('SI15', 'South Indian Delicacies', 'Plain Uttapam', 180::numeric, 14),
+  ('SI16', 'South Indian Delicacies', 'Uttapam (Onion/Tomato/Veg)', 199::numeric, 15),
+  ('SI17', 'South Indian Delicacies', 'Kashmiri Uttapam', 250::numeric, 16),
+  ('SI18', 'South Indian Delicacies', 'Idli Sambhar', 180::numeric, 17),
+  ('SI19', 'South Indian Delicacies', 'Masala Idli', 180::numeric, 18),
+  ('SI20', 'South Indian Delicacies', 'Medu Vada', 190::numeric, 19),
+  ('SI21', 'South Indian Delicacies', 'Curd Rice', 160::numeric, 20),
+  ('SI22', 'South Indian Delicacies', 'Lemon Rice', 160::numeric, 21),
+  ('CH1', 'Chinese', 'Veg Manchurian Dry', 365::numeric, 0),
+  ('CH2', 'Chinese', 'Paneer Manchurian Dry', 385::numeric, 1),
+  ('CH3', 'Chinese', 'Gobhi Manchurian Dry', 365::numeric, 2),
+  ('CH4', 'Chinese', 'Chilli Paneer Dry', 395::numeric, 3),
+  ('CH5', 'Chinese', 'Chilli Mushroom Dry', 385::numeric, 4),
+  ('CH6', 'Chinese', 'Chilli Babycorn Dry', 385::numeric, 5),
+  ('CH7', 'Chinese', 'Chilli Soya Chap Dry', 360::numeric, 6),
+  ('CH8', 'Chinese', 'Sweet Chilli Cauliflower Dry', 355::numeric, 7),
+  ('CH9', 'Chinese', 'Corn Salt and Peppers', 295::numeric, 8),
+  ('CH10', 'Chinese', 'Chilli Soyabean Dry', 295::numeric, 9),
+  ('CH11', 'Chinese', 'Paneer 65', 395::numeric, 10),
+  ('CH12', 'Chinese', 'Aloo 65', 395::numeric, 11),
+  ('NR1', 'Noodles & Rice', 'Veg Hakka Noodles', 185::numeric, 0),
+  ('NR2', 'Noodles & Rice', 'Schezwan Noodles', 195::numeric, 1),
+  ('NR3', 'Noodles & Rice', 'Chilli Garlic Noodles', 199::numeric, 2),
+  ('NR4', 'Noodles & Rice', 'Veg Chowmein', 190::numeric, 3),
+  ('NR5', 'Noodles & Rice', 'Singapore Noodles', 199::numeric, 4),
+  ('NR6', 'Noodles & Rice', 'Jaanki Special Spicy Noodles', 225::numeric, 5),
+  ('NR7', 'Noodles & Rice', 'Veg Fried Rice', 245::numeric, 6),
+  ('NR8', 'Noodles & Rice', 'Schezwan Fried Rice', 275::numeric, 7),
+  ('NR9', 'Noodles & Rice', 'Singapore Fried Rice', 270::numeric, 8),
+  ('NR10', 'Noodles & Rice', 'Mexican Fried Rice', 285::numeric, 9),
+  ('NR11', 'Noodles & Rice', 'Jaanki Special Fried Rice', 295::numeric, 10),
+  ('TD1', 'Tandoori', 'Hara Bhara Kababs', 195::numeric, 0),
+  ('TD2', 'Tandoori', 'Dahi ke Kababs', 299::numeric, 1),
+  ('TD3', 'Tandoori', 'Dahi ke Sholay', 310::numeric, 2),
+  ('TD4', 'Tandoori', 'Paneer Tikka', 465::numeric, 3),
+  ('TD5', 'Tandoori', 'Paneer Malai Tikka', 479::numeric, 4),
+  ('TD6', 'Tandoori', 'Mushroom Tikka', 465::numeric, 5),
+  ('TD7', 'Tandoori', 'Hariyali Paneer Tikka', 489::numeric, 6),
+  ('TD8', 'Tandoori', 'Soya Chaap Tikka', 349::numeric, 7),
+  ('TD9', 'Tandoori', 'Soya Chaap Malai Tikka', 349::numeric, 8),
+  ('TD10', 'Tandoori', 'Soya Chaap Hariyali Tikka', 479::numeric, 9),
+  ('TD11', 'Tandoori', 'Tandoori Aloo Nazakat', 465::numeric, 10),
+  ('TD12', 'Tandoori', 'Tandoori Mashroom Paneer Roll Tikka', 480::numeric, 11),
+  ('TD13', 'Tandoori', 'Hariyali Paneer Roll Tikka', 480::numeric, 12),
+  ('TD14', 'Tandoori', 'Kimchi Kabab (Seasonal)', 415::numeric, 13),
+  ('TD15', 'Tandoori', 'Stuffed Paneer Tikka', 449::numeric, 14),
+  ('TD16', 'Tandoori', 'Jaanki Special Tandoori Platter', 525::numeric, 15),
+  ('XG1', 'Chinese Maincourse', 'Chilli Paneer Gravy', 399::numeric, 0),
+  ('XG2', 'Chinese Maincourse', 'Veg Manchurian Gravy', 370::numeric, 1),
+  ('XG3', 'Chinese Maincourse', 'Baby Corn Mushroom in Hot Garlic Sauce', 385::numeric, 2),
+  ('XG4', 'Chinese Maincourse', 'American Chopsuey (Sweet/Sour)', 410::numeric, 3),
+  ('XG5', 'Chinese Maincourse', 'Veg Spicy Chopsuey', 390::numeric, 4),
+  ('XG6', 'Chinese Maincourse', 'Chilli Soybean Gravy', 385::numeric, 5),
+  ('XG7', 'Chinese Maincourse', 'Paneer Manchurian Gravy', 410::numeric, 6),
+  ('PZ1', 'Pasta / Pizza House', 'Pasta (Alfredo Sauce)', 310::numeric, 0),
+  ('PZ2', 'Pasta / Pizza House', 'Pasta (Arrabbiata Sauce)', 290::numeric, 1),
+  ('PZ3', 'Pasta / Pizza House', 'Pasta (Pesto Sauce)', 320::numeric, 2),
+  ('PZ4', 'Pasta / Pizza House', 'Pasta (Pink Sauce)', 299::numeric, 3),
+  ('PZ5', 'Pasta / Pizza House', 'Baked Mac & Cheese', 340::numeric, 4),
+  ('PZ6', 'Pasta / Pizza House', 'Baked Lasagna', 360::numeric, 5),
+  ('PZ7', 'Pasta / Pizza House', 'Spaghetti', 299::numeric, 6),
+  ('PZ8', 'Pasta / Pizza House', 'Margherita Pizza', 290::numeric, 7),
+  ('PZ9', 'Pasta / Pizza House', 'Herby Italian Pizza', 299::numeric, 8),
+  ('PZ10', 'Pasta / Pizza House', 'Country Feast Pizza', 380::numeric, 9),
+  ('PZ11', 'Pasta / Pizza House', 'Smoked Tandoori Pizza', 410::numeric, 10),
+  ('PZ12', 'Pasta / Pizza House', 'Mexican Wave Pizza', 349::numeric, 11),
+  ('PZ13', 'Pasta / Pizza House', 'Onion Capsicum Pizza', 349::numeric, 12),
+  ('PZ14', 'Pasta / Pizza House', 'Golden Corn Pizza', 440::numeric, 13),
+  ('PZ15', 'Pasta / Pizza House', 'Jaanki Special Pizza', 510::numeric, 14),
+  ('SU1', 'Soups & Shorbas', 'Veg Soup', 140::numeric, 0),
+  ('SU2', 'Soups & Shorbas', 'Manchow Soup', 140::numeric, 1),
+  ('SU3', 'Soups & Shorbas', 'Hot and Sour Soup', 149::numeric, 2),
+  ('SU4', 'Soups & Shorbas', 'Sweet Corn Soup', 149::numeric, 3),
+  ('SU5', 'Soups & Shorbas', 'Mushroom Noodles Soup', 160::numeric, 4),
+  ('SU6', 'Soups & Shorbas', 'Cream of Tomato Soup', 165::numeric, 5),
+  ('SU7', 'Soups & Shorbas', 'Cream of Mushroom Soup', 180::numeric, 6),
+  ('SU8', 'Soups & Shorbas', 'Cream of Broccoli Soup', 180::numeric, 7),
+  ('SU9', 'Soups & Shorbas', 'Veg Lemon Coriander Soup', 165::numeric, 8),
+  ('SU10', 'Soups & Shorbas', 'Tomato Dhania Shorba', 120::numeric, 9),
+  ('SU11', 'Soups & Shorbas', 'Palak Pudina Shorba', 120::numeric, 10)
+) AS v(id, cat_title, name, price, sort_order)
 JOIN public.menu_categories mc ON mc.title = v.cat_title
 ON CONFLICT (id) DO UPDATE SET
   category_id = EXCLUDED.category_id,
   name = EXCLUDED.name,
   price = EXCLUDED.price,
   veg = EXCLUDED.veg,
-  sort_order = EXCLUDED.sort_order;
+  sort_order = EXCLUDED.sort_order,
+  active = true;

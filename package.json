@@ -5,7 +5,10 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "clear-menu-db": "node scripts/clear-menu-db.js",
+    "build-menu-seed": "node -e \"require('fs').writeFileSync('supabase/seed.sql', require('./scripts/menu-seed-data').buildSeedSql())\"",
+    "apply-menu-seed": "node scripts/apply-menu-seed.js"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.3",
