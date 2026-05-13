@@ -249,8 +249,10 @@ function buildFullMenuText(menuRecord) {
 const WA_TEXT_BODY_MAX = 4096;
 /** Larger chunks ⇒ fewer HTTP round-trips + fewer inter-bubble waits (big menus feel faster). */
 const WA_MENU_CHUNK_SAFE = 4040;
-/** Pause between menu bubbles — avoids Meta throttling; huge menus send many parts. */
-const WA_MENU_INTER_BUBBLE_MS = 120;
+/** Pause between menu bubbles — reduces Meta rate limits after many sends. */
+const WA_MENU_INTER_BUBBLE_MS = 280;
+/** Do not block the webhook forever if Supabase is slow or wedged. */
+const MENU_LOAD_TIMEOUT_MS = 11_000;
 
 /**
  * @param {string} text
@@ -376,27 +378,70 @@ function confirmMsg(order) {
   );
 }
 
+/** Load menu from DB; on slow/hung Supabase return fallback so replies are not blocked. */
+async function fetchBotMenuOrFallback(fallbackMenu) {
+  try {
+    return await Promise.race([
+      getBotMenuRecord(fallbackMenu).then((r) => r.menu),
+      new Promise((_, rej) =>
+        setTimeout(() => rej(new Error('menu_load_timeout')), MENU_LOAD_TIMEOUT_MS)
+      ),
+    ]);
+  } catch (e) {
+    console.error('[bot menu]', e?.message || e);
+    return fallbackMenu;
+  }
+}
+
 // ─────────────────────────────────────────────
 //  SEND MESSAGE via Meta Cloud API
 // ─────────────────────────────────────────────
-async function sendMsg(to, text) {
-  try {
-    await graphHttp.post(API_URL, {
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to,
-      type: "text",
-      text: { preview_url: false, body: text }
-    }, {
-      headers: {
-        Authorization: `Bearer ${ACCESS_TOKEN}`,
-        "Content-Type": "application/json"
-      }
-    });
-    console.log(`📤 Sent to ${to}: ${text.substring(0,60)}...`);
-  } catch (err) {
-    console.error(`❌ Send failed:`, err.response?.data || err.message);
+/** @returns {Promise<boolean>} true if Meta accepted the message */
+async function sendMsg(to, text, opts = {}) {
+  const body = String(text ?? '');
+  if (!body.trim()) {
+    console.warn('sendMsg: skipped empty body');
+    return false;
   }
+  const maxAttempts = opts.retries ?? 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await graphHttp.post(
+        API_URL,
+        {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to,
+          type: 'text',
+          text: { preview_url: false, body },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${ACCESS_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+      const preview = body.length > 70 ? `${body.substring(0, 70)}…` : body;
+      console.log(`📤 Sent to ${to}: ${preview}`);
+      return true;
+    } catch (err) {
+      const status = err.response?.status;
+      const data = err.response?.data;
+      const retryable =
+        status === 429 ||
+        status === 408 ||
+        status === 500 ||
+        status === 502 ||
+        status === 503 ||
+        status === 504;
+      console.error(`❌ Send failed (attempt ${attempt}/${maxAttempts})`, status || '', data || err.message);
+      if (!retryable || attempt === maxAttempts) return false;
+      const backoff = Math.min(10_000, 500 * 2 ** (attempt - 1));
+      await new Promise((r) => setTimeout(r, backoff));
+    }
+  }
+  return false;
 }
 
 // Text menu: may send several bubbles when the menu exceeds WhatsApp’s character limit.
@@ -409,11 +454,19 @@ async function sendMenuList(to, menuRecord) {
       return;
     }
     for (let p = 0; p < parts.length; p++) {
-      if (parts[p].length > WA_TEXT_BODY_MAX) {
-        console.error(`Menu chunk ${p + 1} still too long (${parts[p].length}), truncating`);
-        await sendMsg(to, `${parts[p].slice(0, WA_TEXT_BODY_MAX - 40)}\n…`);
-      } else {
-        await sendMsg(to, parts[p]);
+      let chunk = parts[p];
+      if (chunk.length > WA_TEXT_BODY_MAX) {
+        console.error(`Menu chunk ${p + 1} still too long (${chunk.length}), truncating`);
+        chunk = `${chunk.slice(0, WA_TEXT_BODY_MAX - 40)}\n…`;
+      }
+      const ok = await sendMsg(to, chunk);
+      if (!ok) {
+        await sendMsg(
+          to,
+          `⚠️ WhatsApp slowed us down while sending the menu (part ${p + 1}/${parts.length}).\n\nPlease wait a few seconds and type *menu* again, or send item codes like *TL1 MO1*.`,
+          { retries: 3 }
+        );
+        return;
       }
       if (p < parts.length - 1) await new Promise((r) => setTimeout(r, WA_MENU_INTER_BUBBLE_MS));
     }
@@ -504,7 +557,7 @@ async function handleMsg(from, text) {
   /** Menu is only loaded when needed (MENU / item codes / checkout parsing) — saves 1–2 DB round-trips on HI, TRACK, CART, etc. */
   let menuPromise = null;
   const loadBotMenu = async () => {
-    if (!menuPromise) menuPromise = getBotMenuRecord(R.menu).then((r) => r.menu);
+    if (!menuPromise) menuPromise = fetchBotMenuOrFallback(R.menu);
     return menuPromise;
   };
 
@@ -569,7 +622,7 @@ async function handleMsg(from, text) {
   }
 
   // ── GREETINGS ──
-  const greet = ['HI','HELLO','HEY','NAMASTE','START','HAI','HELO','SALAM','NAMASKAR'];
+  const greet = ['HI','HELLO','HEY','NAMASTE','START','HAI','HELO','HII','HEYY','HIII','SALAM','NAMASKAR'];
   if (greet.includes(upper)) {
     await sendMsg(
       from,
@@ -686,7 +739,7 @@ async function processWebhookPayload(body) {
     if (msg.type === 'text' && msg.text?.body != null) {
       await runHandle(String(msg.text.body));
     } else if (msg.type === 'interactive' && msg.interactive?.type === 'list_reply') {
-      const botMenu = (await getBotMenuRecord(R.menu)).menu;
+      const botMenu = await fetchBotMenuOrFallback(R.menu);
       const itemId = msg.interactive.list_reply.id;
       const item = findItemInMenu(botMenu, itemId);
       if (item) {
