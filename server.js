@@ -88,13 +88,38 @@ const sessions = new Map();
 
 function session(id) {
   if (!sessions.has(id)) {
-    sessions.set(id, { state:'idle', cart:[], name:'', phone:'', address:'' });
+    sessions.set(id, {
+      state: 'idle',
+      cart: [],
+      name: '',
+      phone: '',
+      address: '',
+      browseCat: null,
+      browseOffset: 0,
+      pendingItem: null,
+    });
   }
   return sessions.get(id);
 }
 
 function resetSession(id) {
-  sessions.set(id, { state:'idle', cart:[], name:'', phone:'', address:'' });
+  sessions.set(id, {
+    state: 'idle',
+    cart: [],
+    name: '',
+    phone: '',
+    address: '',
+    browseCat: null,
+    browseOffset: 0,
+    pendingItem: null,
+  });
+}
+
+/** Clear category browse + “how many?” step (cart unchanged). */
+function resetBrowseOrderFlow(s) {
+  s.browseCat = null;
+  s.browseOffset = 0;
+  s.pendingItem = null;
 }
 
 /** Last 10 digits from WhatsApp sender id (DB phone is NOT NULL when customer omits phone). */
@@ -253,6 +278,107 @@ function buildFullMenuText(menuRecord) {
   return m;
 }
 
+function getMenuCategoryTitles(menuRecord) {
+  return Object.keys(menuRecord || {}).filter((t) => menuRecord[t] && menuRecord[t].length);
+}
+
+function categoryNumberEmojiLine(index0, title) {
+  const n = index0 + 1;
+  const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
+  const lineLabel = stripForWhatsAppMenuLine(title);
+  if (n <= 9) return `${emojis[n - 1]} ${lineLabel}`;
+  return `*${n}* ${lineLabel}`;
+}
+
+function buildBrowseCategoriesText(menuRecord) {
+  const brand = stripForWhatsAppMenuLine(R.chatBrand || R.name);
+  const titles = getMenuCategoryTitles(menuRecord);
+  if (!titles.length) {
+    return `🍽️ *${brand}*\n\n_Menu is updating — try *MENU FULL* in a moment._${cartCommandBar()}`;
+  }
+  let m = `🍽️ *${brand}*\n\n`;
+  m += `*Choose Category* 👇\n\n`;
+  titles.forEach((t, i) => {
+    m += `${categoryNumberEmojiLine(i, t)}\n`;
+  });
+  m += `\n_Reply *1–${titles.length}* or a category name (e.g. *Momos*)._`;
+  m += `\n_Quick add: *MO1x2* anytime._`;
+  m += `\n_Full list: *MENU FULL*_`;
+  m += cartCommandBar();
+  return m;
+}
+
+function resolveCategoryTitleFromUserInput(raw, titles) {
+  const t = normalizeUserText(raw).trim();
+  if (!t) return null;
+  if (/^\d{1,2}$/.test(t)) {
+    const n = parseInt(t, 10);
+    if (n >= 1 && n <= titles.length) return titles[n - 1];
+    return null;
+  }
+  const u = t.toUpperCase();
+  for (const title of titles) {
+    if (title.toUpperCase() === u) return title;
+  }
+  for (const title of titles) {
+    const tu = title.toUpperCase();
+    if (tu.includes(u) || (u.length >= 3 && u.includes(tu.split(/\s+/)[0]))) return title;
+  }
+  for (const title of titles) {
+    const first = title.split(/\s+/)[0].toUpperCase();
+    if (first.length >= 3 && u.includes(first)) return title;
+  }
+  return null;
+}
+
+function buildCategoryPageText(menuRecord, categoryTitle, offset) {
+  const items = menuRecord[categoryTitle] || [];
+  const icon = menuCategoryEmoji(categoryTitle);
+  const catSafe = stripForWhatsAppMenuLine(categoryTitle);
+  const slice = items.slice(offset, offset + ORDER_FLOW_ITEMS_PER_PAGE);
+  let m = `${icon} *${catSafe}*\n\n`;
+  for (const i of slice) {
+    const code = String(i.id).toUpperCase();
+    const nm = stripForWhatsAppMenuLine(menuLineShortName(i.name));
+    m += `*${code}* ${nm} ${R.currency}${i.price}\n`;
+  }
+  m += `\n_Reply *item code* — I’ll ask how many._`;
+  const hasMore = offset + slice.length < items.length;
+  m += hasMore
+    ? `\n_Type *more* for next items · *back* for categories._`
+    : `\n_Type *back* for categories._`;
+  m += cartCommandBar();
+  return m;
+}
+
+function browseAfterAddHint(s) {
+  if (s.browseCat) return `\n\n_Type another code, *more*, or *back*._`;
+  return '';
+}
+
+async function sendBrowseCategories(to, menuRecord) {
+  const text = buildBrowseCategoriesText(menuRecord);
+  const parts = chunkWhatsAppBody(text, WA_MENU_CHUNK_SAFE).filter((p) => p && p.length);
+  for (let p = 0; p < parts.length; p++) {
+    const ok = await sendMsg(to, parts[p]);
+    if (!ok) {
+      await sendMsg(to, `⚠️ Couldn’t send categories. Try again in a moment.${cartCommandBar()}`, { retries: 3 });
+      return;
+    }
+    if (p < parts.length - 1) await new Promise((r) => setTimeout(r, WA_MENU_INTER_BUBBLE_MS));
+  }
+}
+
+async function askQuantityForItem(from, s, item) {
+  s.pendingItem = { id: item.id, name: item.name, price: item.price, veg: item.veg };
+  await sendMsg(
+    from,
+    `🔢 *How many?*\n\n` +
+      `${R.currency}${item.price} each · *${String(item.id).toUpperCase()}* — ${stripForWhatsAppMenuLine(item.name)}\n\n` +
+      `Reply *1*–*${ORDER_FLOW_QTY_MAX}* (e.g. *2*) or *cancel*${cartCommandBar()}`
+  );
+}
+
 /** WhatsApp Cloud API text body max is 4096; stay a little under for encoding edge cases. */
 const WA_TEXT_BODY_MAX = 4096;
 /** Larger chunks ⇒ fewer HTTP round-trips + fewer inter-bubble waits (big menus feel faster). */
@@ -261,6 +387,10 @@ const WA_MENU_CHUNK_SAFE = 4040;
 const WA_MENU_INTER_BUBBLE_MS = 280;
 /** Do not block the webhook forever if Supabase is slow or wedged. */
 const MENU_LOAD_TIMEOUT_MS = 11_000;
+
+/** Fast path: categories → short item list → code → quantity → cart. */
+const ORDER_FLOW_ITEMS_PER_PAGE = 8;
+const ORDER_FLOW_QTY_MAX = 20;
 
 /**
  * @param {string} text
@@ -569,12 +699,15 @@ async function handleMsg(from, text) {
     return menuPromise;
   };
 
-  console.log(`📩 [${from}] "${text}" | state: ${s.state}`);
+  console.log(
+    `📩 [${from}] "${text}" | state: ${s.state} | cat: ${s.browseCat || '-'} | pending: ${s.pendingItem?.id || '-'}`
+  );
 
   // ── AWAITING NAME + ADDRESS (one reply); optional legacy phone in message ──
   if (s.state === 'awaiting_checkout_details') {
     if (upper === 'MENU' || upper === 'SHOW MENU') {
-      await sendMenuList(from, await loadBotMenu());
+      resetBrowseOrderFlow(s);
+      await sendBrowseCategories(from, await loadBotMenu());
       return;
     }
     if (!isRestaurantOpen()) {
@@ -613,17 +746,26 @@ async function handleMsg(from, text) {
   if (upper === 'HELP' || upper === '?') {
     await sendMsg(
       from,
-      `*MENU* — View menu   *CART* — View cart\n` +
-        `*ORDER* — Checkout   *TRACK* — Order status\n` +
-        `*REMOVE* — Remove last item   *CLEAR* — Empty cart\n` +
-        `*HELP* — Show this list\n\n` +
+        `*MENU* — Pick category → short list → code → qty (fast)\n` +
+        `*MENU FULL* — Full menu (all items)\n` +
+        `*CART* / *ORDER* / *TRACK* / *CLEAR* / *REMOVE*\n\n` +
         `📍 ${R.address}\n🕐 ${R.timing}`
     );
     return;
   }
 
   const open = isRestaurantOpen();
-  const whenClosedAllow = new Set(['MENU', 'SHOW MENU', 'CART', 'CLEAR', 'CANCEL', 'REMOVE', 'UNDO']);
+  const whenClosedAllow = new Set([
+    'MENU',
+    'SHOW MENU',
+    'MENU FULL',
+    'FULL MENU',
+    'CART',
+    'CLEAR',
+    'CANCEL',
+    'REMOVE',
+    'UNDO',
+  ]);
   if (!open && !whenClosedAllow.has(upper)) {
     await sendMsg(from, closedOrderMsg());
     return;
@@ -632,18 +774,25 @@ async function handleMsg(from, text) {
   // ── GREETINGS ──
   const greet = ['HI','HELLO','HEY','NAMASTE','START','HAI','HELO','HII','HEYY','HIII','SALAM','NAMASKAR'];
   if (greet.includes(upper)) {
+    resetBrowseOrderFlow(s);
     await sendMsg(
       from,
-      `👋 Welcome to *${R.chatBrand}*!\n\n` +
-        `🕐 ${R.hoursShort} | Min order *${R.currency}${R.min_order}* | 📍 ${R.areaShort}\n\n` +
-        `Reply *menu* or *MENU* to see our menu`
+      `👋 Hi — Welcome to *${R.chatBrand}*!\n\n` +
+        `🕐 ${R.hoursShort} | Min *${R.currency}${R.min_order}* | 📍 ${R.areaShort}`
     );
+    await sendBrowseCategories(from, await loadBotMenu());
     return;
   }
 
-  // ── MENU ──
-  if (upper === 'MENU' || upper === 'SHOW MENU') {
+  // ── MENU (fast categories) / MENU FULL (entire text menu) ──
+  if (upper === 'MENU FULL' || upper === 'FULL MENU') {
+    resetBrowseOrderFlow(s);
     await sendMenuList(from, await loadBotMenu());
+    return;
+  }
+  if (upper === 'MENU' || upper === 'SHOW MENU') {
+    resetBrowseOrderFlow(s);
+    await sendBrowseCategories(from, await loadBotMenu());
     return;
   }
 
@@ -656,6 +805,7 @@ async function handleMsg(from, text) {
   // ── CLEAR ──
   if (upper === 'CLEAR' || upper === 'CANCEL') {
     s.cart = [];
+    resetBrowseOrderFlow(s);
     await sendMsg(from, `🗑️ Cart cleared.${cartCommandBar()}`);
     return;
   }
@@ -685,13 +835,142 @@ async function handleMsg(from, text) {
       );
       return;
     }
+    resetBrowseOrderFlow(s);
     s.state = 'awaiting_checkout_details';
     await sendMsg(from, checkoutAskMsg(s.cart));
     return;
   }
 
-  // ── PARSE ITEM CODES (e.g. B1 I4 D1, B1x2, 2xB1) ──
   const botMenu = await loadBotMenu();
+
+  if (upper === 'BACK' && !s.browseCat && !s.pendingItem) {
+    await sendMsg(from, `Type *MENU* for categories.${cartCommandBar()}`);
+    return;
+  }
+
+  // ── Reply with quantity after choosing an item code ──
+  if (s.pendingItem) {
+    if (upper === 'CANCEL' || upper === 'NO' || upper === 'BACK') {
+      s.pendingItem = null;
+      await sendMsg(
+        from,
+        `Okay — send another *item code*, *back* for categories, or *MENU*.${cartCommandBar()}`
+      );
+      return;
+    }
+    const trimmedNum = normalizeUserText(text).trim();
+    const qtyNum = parseInt(trimmedNum, 10);
+    if (/^\d{1,2}$/.test(trimmedNum) && qtyNum >= 1 && qtyNum <= ORDER_FLOW_QTY_MAX) {
+      const item = s.pendingItem;
+      s.pendingItem = null;
+      for (let q = 0; q < qtyNum; q++) s.cart.push({ ...item });
+      await sendMsg(
+        from,
+        `${formatAddedToCartReply([{ item, qty: qtyNum }], [], s.cart)}${browseAfterAddHint(s)}`
+      );
+      return;
+    }
+    await sendMsg(
+      from,
+      `⚠️ Reply with a number *1*–*${ORDER_FLOW_QTY_MAX}* or *cancel*.${cartCommandBar()}`
+    );
+    return;
+  }
+
+  // ── Inside a category: short list, more, back, codes ──
+  if (s.browseCat) {
+    const titles = getMenuCategoryTitles(botMenu);
+    const items = botMenu[s.browseCat];
+    if (!items || !items.length) {
+      resetBrowseOrderFlow(s);
+      await sendBrowseCategories(from, botMenu);
+      return;
+    }
+
+    if (upper === 'BACK' || upper === 'CATEGORIES' || upper === 'HOME') {
+      resetBrowseOrderFlow(s);
+      await sendBrowseCategories(from, botMenu);
+      return;
+    }
+    if (upper === 'MORE' || upper === 'NEXT') {
+      const nextOff = s.browseOffset + ORDER_FLOW_ITEMS_PER_PAGE;
+      if (nextOff >= items.length) {
+        await sendMsg(
+          from,
+          `That’s all in *${stripForWhatsAppMenuLine(s.browseCat)}*.\n\nType *back* for categories.${cartCommandBar()}`
+        );
+        return;
+      }
+      s.browseOffset = nextOff;
+      await sendMsg(from, buildCategoryPageText(botMenu, s.browseCat, s.browseOffset));
+      return;
+    }
+
+    const switched = resolveCategoryTitleFromUserInput(text, titles);
+    if (switched) {
+      s.browseCat = switched;
+      s.browseOffset = 0;
+      await sendMsg(from, buildCategoryPageText(botMenu, switched, 0));
+      return;
+    }
+
+    const rawNorm = normalizeUserText(text).trim();
+    const parts = rawNorm.split(/[\s,،]+/).filter(Boolean);
+    if (parts.length === 1) {
+      const tok = parseOneOrderToken(parts[0]);
+      if (tok && tok.qty === 1) {
+        const item = findItemInMenu(botMenu, tok.code);
+        if (item) {
+          await askQuantityForItem(from, s, item);
+          return;
+        }
+      }
+      if (tok && tok.qty > 1) {
+        const item = findItemInMenu(botMenu, tok.code);
+        if (item) {
+          for (let q = 0; q < tok.qty; q++) s.cart.push({ ...item });
+          await sendMsg(
+            from,
+            `${formatAddedToCartReply([{ item, qty: tok.qty }], [], s.cart)}${browseAfterAddHint(s)}`
+          );
+          return;
+        }
+      }
+    }
+
+    const { addedSlots, unknown } = parseOrderLineTokens(text, botMenu);
+    if (addedSlots.length > 0) {
+      for (const { item, qty } of addedSlots) {
+        for (let q = 0; q < qty; q++) s.cart.push({ ...item });
+      }
+      await sendMsg(from, `${formatAddedToCartReply(addedSlots, unknown, s.cart)}${browseAfterAddHint(s)}`);
+      return;
+    }
+    if (unknown.length > 0) {
+      await sendMsg(
+        from,
+        `⚠️ Not found: ${unknown.join(', ')}\n\nUse a code from the list, *more*, or *back*.${cartCommandBar()}`
+      );
+      return;
+    }
+    await sendMsg(
+      from,
+      `Send an *item code*, *more*, *back*, or pick another category (*1*–*${titles.length}*).${cartCommandBar()}`
+    );
+    return;
+  }
+
+  // ── Pick category from home (number or name) ──
+  const titlesIdle = getMenuCategoryTitles(botMenu);
+  const pickedIdle = resolveCategoryTitleFromUserInput(text, titlesIdle);
+  if (pickedIdle) {
+    s.browseCat = pickedIdle;
+    s.browseOffset = 0;
+    await sendMsg(from, buildCategoryPageText(botMenu, pickedIdle, 0));
+    return;
+  }
+
+  // ── PARSE ITEM CODES (e.g. B1 I4 D1, B1x2, 2xB1) — from home, adds straight to cart ──
   const { addedSlots, unknown } = parseOrderLineTokens(text, botMenu);
   for (const { item, qty } of addedSlots) {
     for (let q = 0; q < qty; q++) s.cart.push({ ...item });
@@ -799,8 +1078,7 @@ async function processWebhookPayload(body) {
               await sendMsg(from, closedOrderMsg());
             } else {
               const s = session(from);
-              s.cart.push(item);
-              await sendMsg(from, formatAddedToCartReply([{ item, qty: 1 }], [], s.cart));
+              await askQuantityForItem(from, s, item);
             }
           }
         } else if (msg.type === 'interactive' && msg.interactive?.type === 'button_reply') {
