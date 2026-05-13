@@ -176,11 +176,11 @@ function parseOneOrderToken(part) {
 }
 
 function parseOrderLineTokens(text, menuRecord) {
-  const upper = String(text).trim().toUpperCase();
+  const upper = normalizeUserText(text).toUpperCase();
   const rawParts = upper.split(/[\s,،]+/).filter(Boolean);
   const addedSlots = [];
   const unknown = [];
-  const skipUnknown = /^(I|A|THE|AND|OR|OF|IS|IN|OK|NO|YES|HI|HEY|HELLO)$/i;
+  const skipUnknown = /^(I|A|THE|AND|OR|OF|IS|IN|OK|NO|YES|HI|HEY|HELLO|MENU|SHOW)$/i;
 
   for (const part of rawParts) {
     const parsed = parseOneOrderToken(part);
@@ -220,8 +220,8 @@ function menuLineShortName(name) {
 
 /** Full text menu (one string). Items are one per line so we can split under WhatsApp’s 4096-char limit. */
 function buildFullMenuText(menuRecord) {
-  const brand = R.chatBrand || R.name || 'Our restaurant';
-  const subline = `_${R.hoursShort} · Min ${R.currency}${R.min_order} · ${R.areaShort}_`;
+  const brand = stripForWhatsAppMenuLine(R.chatBrand || R.name || 'Our restaurant');
+  const subline = `_${stripForWhatsAppMenuLine(R.hoursShort)} · Min ${R.currency}${R.min_order} · ${stripForWhatsAppMenuLine(R.areaShort)}_`;
   const rule = '· · · · · · · · · · · · · ·';
   let m = `🍴 *${brand}*\n_Your menu · order with codes below_\n${subline}\n${rule}\n\n`;
   const entries = Object.entries(menuRecord).filter(([, items]) => items && items.length);
@@ -230,23 +230,27 @@ function buildFullMenuText(menuRecord) {
   }
   for (const [cat, items] of entries) {
     const icon = menuCategoryEmoji(cat);
-    m += `${icon} *${cat}*\n`;
+    const catSafe = stripForWhatsAppMenuLine(cat);
+    m += `${icon} *${catSafe}*\n`;
     for (const i of items) {
       const code = String(i.id).toUpperCase();
-      const nm = menuLineShortName(i.name);
+      const nm = stripForWhatsAppMenuLine(menuLineShortName(i.name));
       m += `   ▫️ *${code}* — ${nm} — *${R.currency}${i.price}*\n`;
     }
     m += '\n';
   }
   m += `${rule}\n`;
   m += '👉 *TL1 MO1 BD1* · *MO1x2* = two of the same item\n';
-  m += `_${R.tagline}_`;
+  m += `_${stripForWhatsAppMenuLine(R.tagline)}_`;
   return m;
 }
 
-/** WhatsApp Cloud API text body max is 4096; stay under to avoid silent send failures. */
+/** WhatsApp Cloud API text body max is 4096; stay a little under for encoding edge cases. */
 const WA_TEXT_BODY_MAX = 4096;
-const WA_MENU_CHUNK_SAFE = 4000;
+/** Larger chunks ⇒ fewer HTTP round-trips + fewer inter-bubble waits (big menus feel faster). */
+const WA_MENU_CHUNK_SAFE = 4040;
+/** Pause between menu bubbles — avoids Meta throttling; huge menus send many parts. */
+const WA_MENU_INTER_BUBBLE_MS = 120;
 
 /**
  * @param {string} text
@@ -254,26 +258,32 @@ const WA_MENU_CHUNK_SAFE = 4000;
  * @returns {string[]}
  */
 function chunkWhatsAppBody(text, maxLen = WA_MENU_CHUNK_SAFE) {
-  if (text.length <= maxLen) return [text];
+  const t = String(text || '').trimEnd();
+  if (!t.length) return [];
+  if (t.length <= maxLen) return [t];
   const chunks = [];
-  let rest = text.trimEnd();
+  let rest = t;
   const cont = '✨ _Menu continues…_\n\n';
   let first = true;
-  while (rest.length) {
+  let guard = 0;
+  while (rest.length && guard++ < 500) {
     const overhead = first ? 0 : cont.length;
-    const budget = maxLen - overhead;
+    const budget = Math.max(256, maxLen - overhead);
     let take = Math.min(rest.length, budget);
     if (take < rest.length) {
       const cut = rest.lastIndexOf('\n', take);
       if (cut >= Math.floor(budget * 0.55)) take = cut + 1;
     }
+    if (take < 1) take = Math.min(rest.length, budget);
     let piece = rest.slice(0, take).trim();
     rest = rest.slice(take).trimStart();
     if (!first) piece = cont + piece;
-    chunks.push(piece);
+    if (piece.length) chunks.push(piece);
+    else if (!rest.length) break;
+    else rest = rest.slice(1);
     first = false;
   }
-  return chunks;
+  return chunks.length ? chunks : [t.slice(0, maxLen)];
 }
 
 /** Bottom bar on cart-related replies (WhatsApp). */
@@ -391,16 +401,28 @@ async function sendMsg(to, text) {
 
 // Text menu: may send several bubbles when the menu exceeds WhatsApp’s character limit.
 async function sendMenuList(to, menuRecord) {
-  const full = buildFullMenuText(menuRecord);
-  const parts = chunkWhatsAppBody(full, WA_MENU_CHUNK_SAFE);
-  for (let p = 0; p < parts.length; p++) {
-    if (parts[p].length > WA_TEXT_BODY_MAX) {
-      console.error(`Menu chunk ${p + 1} still too long (${parts[p].length}), truncating`);
-      await sendMsg(to, `${parts[p].slice(0, WA_TEXT_BODY_MAX - 40)}\n…`);
-    } else {
-      await sendMsg(to, parts[p]);
+  try {
+    const full = buildFullMenuText(menuRecord);
+    const parts = chunkWhatsAppBody(full, WA_MENU_CHUNK_SAFE).filter((p) => p && p.length);
+    if (!parts.length) {
+      await sendMsg(to, '🍴 Menu is empty right now. Please try again soon.');
+      return;
     }
-    if (p < parts.length - 1) await new Promise((r) => setTimeout(r, 400));
+    for (let p = 0; p < parts.length; p++) {
+      if (parts[p].length > WA_TEXT_BODY_MAX) {
+        console.error(`Menu chunk ${p + 1} still too long (${parts[p].length}), truncating`);
+        await sendMsg(to, `${parts[p].slice(0, WA_TEXT_BODY_MAX - 40)}\n…`);
+      } else {
+        await sendMsg(to, parts[p]);
+      }
+      if (p < parts.length - 1) await new Promise((r) => setTimeout(r, WA_MENU_INTER_BUBBLE_MS));
+    }
+  } catch (err) {
+    console.error('sendMenuList:', err?.message || err);
+    await sendMsg(
+      to,
+      `⚠️ Couldn't send the full menu right now. Please try *menu* again in a moment, or type *HELP*.`
+    );
   }
 }
 
@@ -446,10 +468,38 @@ async function completeCheckoutFromParsed(from, s, parsed) {
 }
 
 // ─────────────────────────────────────────────
+//  INBOUND TEXT NORMALIZATION (WhatsApp / keyboards)
+// ─────────────────────────────────────────────
+
+/** NFKC + strip invisible chars / odd spaces so "menu" always matches MENU. */
+function normalizeUserText(raw) {
+  return String(raw || '')
+    .normalize('NFKC')
+    .replace(/[\u200B-\u200D\uFEFF\u2060]/g, '')
+    .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, ' ')
+    .trim();
+}
+
+/** Uppercase command with quotes / trailing punctuation removed ("menu." → MENU). */
+function commandKey(raw) {
+  let s = normalizeUserText(raw).toUpperCase().replace(/\s+/g, ' ').trim();
+  s = s.replace(/[`"'「」«»]+/g, '').trim();
+  s = s.replace(/[.!?,…。！？]+$/u, '').trim();
+  return s;
+}
+
+/** DB text can include * _ ~ ` — breaks WhatsApp bold/italic; strip for menu bubbles. */
+function stripForWhatsAppMenuLine(s) {
+  return String(s)
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/[*_~`]/g, '·');
+}
+
+// ─────────────────────────────────────────────
 //  CORE MESSAGE HANDLER
 // ─────────────────────────────────────────────
 async function handleMsg(from, text) {
-  const upper = text.trim().toUpperCase();
+  const upper = commandKey(text);
   const s = session(from);
   /** Menu is only loaded when needed (MENU / item codes / checkout parsing) — saves 1–2 DB round-trips on HI, TRACK, CART, etc. */
   let menuPromise = null;
@@ -525,7 +575,7 @@ async function handleMsg(from, text) {
       from,
       `👋 Welcome to *${R.chatBrand}*!\n\n` +
         `🕐 ${R.hoursShort} | Min order *${R.currency}${R.min_order}* | 📍 ${R.areaShort}\n\n` +
-        `Reply *MENU* to see our menu`
+        `Reply *menu* or *MENU* to see our menu`
     );
     return;
   }
@@ -621,11 +671,21 @@ async function processWebhookPayload(body) {
   for (const msg of value.messages) {
     const from = msg.from;
 
-    if (msg.type === 'text') {
-      await handleMsg(from, msg.text.body);
-    }
+    const runHandle = async (body) => {
+      try {
+        await handleMsg(from, body);
+      } catch (err) {
+        console.error('handleMsg error:', err?.message || err);
+        await sendMsg(
+          from,
+          '⚠️ Something went wrong on our side. Please try again, or type *HELP*.'
+        );
+      }
+    };
 
-    if (msg.type === 'interactive' && msg.interactive.type === 'list_reply') {
+    if (msg.type === 'text' && msg.text?.body != null) {
+      await runHandle(String(msg.text.body));
+    } else if (msg.type === 'interactive' && msg.interactive?.type === 'list_reply') {
       const botMenu = (await getBotMenuRecord(R.menu)).menu;
       const itemId = msg.interactive.list_reply.id;
       const item = findItemInMenu(botMenu, itemId);
@@ -638,6 +698,10 @@ async function processWebhookPayload(body) {
           await sendMsg(from, formatAddedToCartReply([{ item, qty: 1 }], [], s.cart));
         }
       }
+    } else if (msg.type === 'interactive' && msg.interactive?.type === 'button_reply') {
+      const br = msg.interactive.button_reply;
+      const t = br && (br.title || br.id);
+      if (t) await runHandle(String(t));
     }
   }
 }
