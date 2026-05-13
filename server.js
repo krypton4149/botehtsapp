@@ -1,12 +1,4 @@
-/**
- * ╔══════════════════════════════════════════════════════════╗
- * ║     RESTAURANT WHATSAPP BUSINESS BOT — META CLOUD API   ║
- * ║     Official Meta API · No QR · Runs 24/7 in Cloud      ║
- * ╚══════════════════════════════════════════════════════════╝
- *
- * SETUP: Fill in your credentials in the .env file
- * DEPLOY: Works on Railway, Render, Heroku, or any Node host
- */
+/** Restaurant WhatsApp bot — Meta Cloud API. Configure via `.env`. */
 
 require('dotenv').config();
 const express = require('express');
@@ -71,7 +63,8 @@ const R = {
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const ACCESS_TOKEN    = process.env.ACCESS_TOKEN;
 const VERIFY_TOKEN    = process.env.VERIFY_TOKEN || "restaurant_bot_2024";
-const API_URL         = `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`;
+const GRAPH_BASE      = `https://graph.facebook.com/${process.env.GRAPH_API_VERSION || 'v25.0'}`;
+const API_URL         = `${GRAPH_BASE}/${PHONE_NUMBER_ID}/messages`;
 
 // ─────────────────────────────────────────────
 //  SESSION STORAGE (orders live in Supabase — see lib/supabase-orders.js)
@@ -715,46 +708,77 @@ async function handleMsg(from, text) {
 }
 
 async function processWebhookPayload(body) {
-  const entry   = body.entry?.[0];
-  const changes = entry?.changes?.[0];
-  const value   = changes?.value;
+  const entries = body?.entry;
+  if (!Array.isArray(entries) || !entries.length) {
+    if (body && Object.keys(body).length) {
+      console.log('📨 Webhook: no messages entry (often status-only or test ping)');
+    }
+    return;
+  }
 
-  if (!value?.messages) return;
+  for (const entry of entries) {
+    const changes = entry?.changes;
+    if (!Array.isArray(changes)) continue;
 
-  for (const msg of value.messages) {
-    const from = msg.from;
+    for (const change of changes) {
+      if (change.field && change.field !== 'messages') continue;
 
-    const runHandle = async (body) => {
-      try {
-        await handleMsg(from, body);
-      } catch (err) {
-        console.error('handleMsg error:', err?.message || err);
-        await sendMsg(
-          from,
-          '⚠️ Something went wrong on our side. Please try again, or type *HELP*.'
+      const value = change?.value;
+      if (!value) continue;
+
+      const metaPid = value.metadata?.phone_number_id;
+      if (metaPid && PHONE_NUMBER_ID && String(metaPid) !== String(PHONE_NUMBER_ID)) {
+        console.warn(
+          '⚠️ Webhook phone_number_id mismatch — incoming events are for a different number than PHONE_NUMBER_ID in .env. got=',
+          metaPid,
+          'expected=',
+          PHONE_NUMBER_ID
         );
       }
-    };
 
-    if (msg.type === 'text' && msg.text?.body != null) {
-      await runHandle(String(msg.text.body));
-    } else if (msg.type === 'interactive' && msg.interactive?.type === 'list_reply') {
-      const botMenu = await fetchBotMenuOrFallback(R.menu);
-      const itemId = msg.interactive.list_reply.id;
-      const item = findItemInMenu(botMenu, itemId);
-      if (item) {
-        if (!isRestaurantOpen()) {
-          await sendMsg(from, closedOrderMsg());
+      const messages = value.messages;
+      if (!Array.isArray(messages) || !messages.length) continue;
+
+      console.log(`📨 Webhook: ${messages.length} incoming message(s) · phone_number_id=${metaPid || '?'}`);
+
+      for (const msg of messages) {
+        const from = msg.from;
+
+        const runHandle = async (textBody) => {
+          try {
+            await handleMsg(from, textBody);
+          } catch (err) {
+            console.error('handleMsg error:', err?.message || err);
+            await sendMsg(
+              from,
+              '⚠️ Something went wrong on our side. Please try again, or type *HELP*.'
+            );
+          }
+        };
+
+        if (msg.type === 'text' && msg.text?.body != null) {
+          await runHandle(String(msg.text.body));
+        } else if (msg.type === 'interactive' && msg.interactive?.type === 'list_reply') {
+          const botMenu = await fetchBotMenuOrFallback(R.menu);
+          const itemId = msg.interactive.list_reply.id;
+          const item = findItemInMenu(botMenu, itemId);
+          if (item) {
+            if (!isRestaurantOpen()) {
+              await sendMsg(from, closedOrderMsg());
+            } else {
+              const s = session(from);
+              s.cart.push(item);
+              await sendMsg(from, formatAddedToCartReply([{ item, qty: 1 }], [], s.cart));
+            }
+          }
+        } else if (msg.type === 'interactive' && msg.interactive?.type === 'button_reply') {
+          const br = msg.interactive.button_reply;
+          const t = br && (br.title || br.id);
+          if (t) await runHandle(String(t));
         } else {
-          const s = session(from);
-          s.cart.push(item);
-          await sendMsg(from, formatAddedToCartReply([{ item, qty: 1 }], [], s.cart));
+          console.log('📨 Webhook: skipped non-text message type:', msg.type);
         }
       }
-    } else if (msg.type === 'interactive' && msg.interactive?.type === 'button_reply') {
-      const br = msg.interactive.button_reply;
-      const t = br && (br.title || br.id);
-      if (t) await runHandle(String(t));
     }
   }
 }
@@ -784,6 +808,40 @@ app.post('/webhook', (req, res) => {
   setImmediate(() => {
     processWebhookPayload(body).catch((err) => console.error('Webhook error:', err.message));
   });
+});
+
+/** Quick check: token + PHONE_NUMBER_ID work with Meta Graph (open in browser on your host). */
+app.get('/health/whatsapp', async (req, res) => {
+  const out = {
+    phoneNumberIdConfigured: Boolean(PHONE_NUMBER_ID),
+    accessTokenConfigured: Boolean(ACCESS_TOKEN),
+    verifyTokenConfigured: Boolean(VERIFY_TOKEN),
+    graphOk: false,
+    displayPhoneNumber: null,
+    verifiedName: null,
+    error: null,
+    hints: [
+      'Webhook URL must be public HTTPS and subscribed to the "messages" field.',
+      'VERIFY_TOKEN in .env must match Meta → WhatsApp → Configuration → Webhook verify token.',
+      'PHONE_NUMBER_ID must be the same number that shows in each webhook payload (metadata.phone_number_id).',
+    ],
+  };
+  if (!out.phoneNumberIdConfigured || !out.accessTokenConfigured) {
+    return res.status(200).json(out);
+  }
+  try {
+    const r = await graphHttp.get(`${GRAPH_BASE}/${PHONE_NUMBER_ID}`, {
+      params: { fields: 'display_phone_number,verified_name' },
+      headers: { Authorization: `Bearer ${ACCESS_TOKEN}` },
+    });
+    out.graphOk = true;
+    out.displayPhoneNumber = r.data?.display_phone_number ?? null;
+    out.verifiedName = r.data?.verified_name ?? null;
+    res.status(200).json(out);
+  } catch (e) {
+    out.error = e.response?.data || e.message || String(e);
+    res.status(503).json(out);
+  }
 });
 
 // ─────────────────────────────────────────────
@@ -884,13 +942,10 @@ app.patch('/api/orders/:orderNum/dispatch', async (req, res) => {
 // ─────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`\n╔═══════════════════════════════════════╗`);
-  console.log(`║   ${R.name} — WhatsApp Bot       `);
-  console.log(`╠═══════════════════════════════════════╣`);
-  console.log(`║  Dashboard : http://localhost:${PORT}  ( /orders  /menu  /settings )`);
-  console.log(`║  Webhook   : http://localhost:${PORT}/webhook`);
-  console.log(`╚═══════════════════════════════════════╝\n`);
-  if (!PHONE_NUMBER_ID) console.warn(`⚠️  Add META credentials to .env file!\n`);
+  console.log(`\n${R.name} — WhatsApp bot on port ${PORT}`);
+  console.log(`  Dashboard: /  /orders  /menu  /settings`);
+  console.log(`  Webhook:   POST /webhook   ·   Meta: GET /health/whatsapp`);
+  if (!PHONE_NUMBER_ID) console.warn('  ⚠️  Set PHONE_NUMBER_ID and ACCESS_TOKEN in .env\n');
   setImmediate(() => {
     getBotMenuRecord(R.menu).catch(() => {});
   });

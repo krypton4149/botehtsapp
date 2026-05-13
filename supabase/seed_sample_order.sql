@@ -1,2 +1,0 @@
--- Optional: insert a test order from the SQL Editor if you need dummy data.
--- (Sample "Test Customer" seed removed — use real orders from the bot instead.)
