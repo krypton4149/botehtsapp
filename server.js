@@ -217,8 +217,8 @@ function menuLineShortName(name) {
   return n;
 }
 
-/** Compact text menu (MENU command). */
-function compactMenuMsg(menuRecord) {
+/** Full text menu (one string). Items are one per line so we can split under WhatsApp’s 4096-char limit. */
+function buildFullMenuText(menuRecord) {
   let m = '🍽️ *MaaJaanki Menu*\n\n';
   const entries = Object.entries(menuRecord).filter(([, items]) => items && items.length);
   if (!entries.length) {
@@ -226,13 +226,45 @@ function compactMenuMsg(menuRecord) {
   }
   for (const [cat, items] of entries) {
     m += `*${cat}*\n`;
-    const parts = items.map(
-      (i) => `${String(i.id).toUpperCase()} ${menuLineShortName(i.name)} ${R.currency}${i.price}`
-    );
-    m += `${parts.join(' | ')}\n\n`;
+    for (const i of items) {
+      m += `${String(i.id).toUpperCase()} ${menuLineShortName(i.name)} ${R.currency}${i.price}\n`;
+    }
+    m += '\n';
   }
   m += '👉 *TL1 MO1 BD1* · *MO1x2* = two of the same item';
   return m;
+}
+
+/** WhatsApp Cloud API text body max is 4096; stay under to avoid silent send failures. */
+const WA_TEXT_BODY_MAX = 4096;
+const WA_MENU_CHUNK_SAFE = 4000;
+
+/**
+ * @param {string} text
+ * @param {number} [maxLen]
+ * @returns {string[]}
+ */
+function chunkWhatsAppBody(text, maxLen = WA_MENU_CHUNK_SAFE) {
+  if (text.length <= maxLen) return [text];
+  const chunks = [];
+  let rest = text.trimEnd();
+  const cont = '📄 *Menu (continued)*\n\n';
+  let first = true;
+  while (rest.length) {
+    const overhead = first ? 0 : cont.length;
+    const budget = maxLen - overhead;
+    let take = Math.min(rest.length, budget);
+    if (take < rest.length) {
+      const cut = rest.lastIndexOf('\n', take);
+      if (cut >= Math.floor(budget * 0.55)) take = cut + 1;
+    }
+    let piece = rest.slice(0, take).trim();
+    rest = rest.slice(take).trimStart();
+    if (!first) piece = cont + piece;
+    chunks.push(piece);
+    first = false;
+  }
+  return chunks;
 }
 
 /** Bottom bar on cart-related replies (WhatsApp). */
@@ -348,9 +380,19 @@ async function sendMsg(to, text) {
   }
 }
 
-// Text menu only (compact format for WhatsApp).
+// Text menu: may send several bubbles when the menu exceeds WhatsApp’s character limit.
 async function sendMenuList(to, menuRecord) {
-  await sendMsg(to, compactMenuMsg(menuRecord));
+  const full = buildFullMenuText(menuRecord);
+  const parts = chunkWhatsAppBody(full, WA_MENU_CHUNK_SAFE);
+  for (let p = 0; p < parts.length; p++) {
+    if (parts[p].length > WA_TEXT_BODY_MAX) {
+      console.error(`Menu chunk ${p + 1} still too long (${parts[p].length}), truncating`);
+      await sendMsg(to, `${parts[p].slice(0, WA_TEXT_BODY_MAX - 40)}\n…`);
+    } else {
+      await sendMsg(to, parts[p]);
+    }
+    if (p < parts.length - 1) await new Promise((r) => setTimeout(r, 400));
+  }
 }
 
 /** Build order lines from session cart, save, confirm, clear session. */
@@ -411,6 +453,10 @@ async function handleMsg(from, text) {
 
   // ── AWAITING NAME + ADDRESS (one reply); optional legacy phone in message ──
   if (s.state === 'awaiting_checkout_details') {
+    if (upper === 'MENU' || upper === 'SHOW MENU') {
+      await sendMenuList(from, await loadBotMenu());
+      return;
+    }
     if (!isRestaurantOpen()) {
       await sendMsg(from, closedOrderMsg());
       resetSession(from);
@@ -457,7 +503,7 @@ async function handleMsg(from, text) {
   }
 
   const open = isRestaurantOpen();
-  const whenClosedAllow = new Set(['CART', 'CLEAR', 'CANCEL', 'REMOVE', 'UNDO']);
+  const whenClosedAllow = new Set(['MENU', 'SHOW MENU', 'CART', 'CLEAR', 'CANCEL', 'REMOVE', 'UNDO']);
   if (!open && !whenClosedAllow.has(upper)) {
     await sendMsg(from, closedOrderMsg());
     return;
